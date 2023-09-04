@@ -243,7 +243,14 @@ class PDP11:
         # but of course must be instantiated
         if console:                        # it's helpful to disable for tests
             self._KL = KL11(self.ub)
-        self._RP = RPRM(self.ub)
+        try:
+            rp = RPRM(self.ub)
+        except FileNotFoundError:
+            self.logger.info("NO DISK DRIVE FILE FOUND; DISK DISABLED")
+        else:
+            self._RP = rp
+
+        # line clock
         self._KW = KW11(self.ub)
 
     def physRW(self, physaddr, value=None):
