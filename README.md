@@ -103,3 +103,12 @@ Some (somewhat trivial) unit tests:
 
     python3 pdptests.py
 
+# TODO
+
+Known areas that need work include:
+* Need to emulate more devices, especially a DL-11
+* The UNIBUS address space and especially the UBA system is a stub. The disk drive is, in effect, emulated as being on the Massbus and uses its BAE register (which the unix driver sets accordingly) for the 22-bit physical address extension bits.
+* No floating point instructions implemented; not sure how important they are. They were an option, so presumably all code can deal with them not being present.
+* I am not at all convinced I have all the subtleties of traps, synchronous traps, aborts, interrupts, etc correct. I have it good enough for what Unix expects.
+* Explore more regarding asynchronous disk I/O.
+* When running unix, there's an inexplicable pause that happens fairly often. I have ruled out gc as a cause. I am suspicious this has something to do with the reduced clock rate, or a subtle semantic of interrupts/traps/etc.
