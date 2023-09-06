@@ -53,6 +53,7 @@ def op00_4_jsr(cpu, inst):
     # NOTE: no condition code modifications
 
     # cpu.logger.debug(f"JSR to {oct(tmp)} from {oct(cpu.r[cpu.PC])}")
+    cpu.mmu.MMR1mod(0o366)           # the encoding for -2 on sp
     cpu.stackpush(cpu.r[Rn])
     cpu.r[Rn] = cpu.r[cpu.PC]        # this could be a no-op if Rn == 7
     cpu.r[cpu.PC] = tmp
