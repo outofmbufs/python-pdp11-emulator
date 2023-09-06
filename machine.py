@@ -101,6 +101,11 @@ class PDP11:
     # the console switches (read) and LEDs (write)
     SWLEDS_OFFS = 0o17570
 
+    # this is a superb hack for controlling the logging level for debug
+    # this is in the unibus address range reserved for "testers" -- not
+    # sure what that really is but this is as good a place for it as any
+    LOGGING_OFFS = 0o17000
+
     # the CPU error register and some useful bit values
     CPUERROR_OFFS = 0o17766
 
@@ -212,7 +217,8 @@ class PDP11:
         for attrname, offs in (('psw', self.PS_OFFS),
                                ('stack_limit_register', self.STACKLIM_OFFS),
                                ('swleds', self.SWLEDS_OFFS),
-                               ('error_register', self.CPUERROR_OFFS)):
+                               ('error_register', self.CPUERROR_OFFS),
+                               ('logging_hack', self.LOGGING_OFFS)):
             self.ub.mmio.register_simpleattr(self, attrname, offs)
 
         # console switches (read) and blinken lights (write)
@@ -410,7 +416,7 @@ class PDP11:
                 if addrmode == 0o50:
                     addr = self.mmu.wordRW(addr, space=self.mmu.DSPACE)
                 if Rn == self.SP:
-                    self.strapcheck = True
+                    self.strapcheck = True    # XXX THIS IS A NO-OP LOOK
 
             # X(Rn) and @X(Rn)
             case 0, (0o60 | 0o70) as addrmode, Rn:
@@ -928,6 +934,14 @@ class PDP1170(PDP11):
         self.r[6] = self.stackpointers[self.psw_curmode]
 
         # the PC was already sync'd in syncregs()
+
+    @property
+    def logging_hack(self):
+        return self.logger.level
+
+    @logging_hack.setter
+    def logging_hack(self, value):
+        self.logger.setLevel(value)
 
     # this is convenient to have for debugging and logging
     def spsw(self, v=None):
