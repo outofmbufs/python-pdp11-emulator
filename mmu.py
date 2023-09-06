@@ -150,22 +150,6 @@ class MemoryMgmt:
                 if (aprnum, mode, space, w) in self.segcache:
                     del self.segcache[(aprnum, mode, space, w)]
 
-            # --- XXX THIS IS JUST INFORMATIONAL / REASSURING FOR DEBUGGING
-            # --- take this entire block out when satisfied
-            if parpdr == 1:
-                pdr = aprfile[aprnum][1]
-                # various PDR mods are of interest for logging for debug
-                if ((value & 4) == 0) and (pdr & 4):
-                    self.cpu.logger.debug(
-                        f"MMU: Write perm being removed "
-                        f"{aprnum=} {mode=} {space=}")
-                if ((pdr >> 8) & 0xFF) > ((value >> 8) & 0xFF):
-                    self.cpu.logger.debug(
-                        f"MMU: segment being shortened "
-                        f"pdr={oct(pdr)} value={oct(value)}"
-                        f" {aprnum=} {mode=} {space=}")
-            # --- XXX END XXX
-
             aprfile[aprnum][parpdr] = value
 
             # Per the handbook - the A and W bits in a PDR are reset to
@@ -301,9 +285,6 @@ class MemoryMgmt:
 
         # All this translation code takes quite some time; caching
         # dramatically improves performance.
-        #
-        # I/O space mappings are not cached (not performance-critical).
-        #
 
         if self.nocache and self.segcache:
             self.segcache = {}
@@ -360,8 +341,8 @@ class MemoryMgmt:
 
         self.cpu.straps |= straps
 
-        # only non-trapping non-io results can be cached:
-        if straps == 0 and pa < self.iopage_base:
+        # only non-trapping can be cached
+        if straps == 0:
             self._encache(xkey, pdr, pa - vaddr)
         return pa
 
