@@ -42,10 +42,10 @@ class TestMethods(unittest.TestCase):
     #   There's no rhyme or reason in picking the approach for a given test.
 
     # used to create various instances, collects all the options
-    # detail into this one place...
+    # detail into this one place... mostly this is about loglevel
     @classmethod
     def make_pdp(cls):
-        return PDP1170(console=False, loglevel=cls.PDPLOGLEVEL)
+        return PDP1170(loglevel=cls.PDPLOGLEVEL)
 
     @staticmethod
     def ioaddr(p, offs):
@@ -84,6 +84,8 @@ class TestMethods(unittest.TestCase):
         ns.UISA0 = ns.UDSD0 + 0o20
         ns.UDSA0 = ns.UISA0 + 0o20
 
+        ns.MMR0 = cls.ioaddr(p, p.mmu.MMR0_OFFS)
+
         return ns
 
     #
@@ -107,7 +109,7 @@ class TestMethods(unittest.TestCase):
         #  Puts 0o33333 into physical location 0o20002
         #  Puts 0o44444 into physical location 0o40000
         #  Sets Kernel Instruction space A0 to point to physical 0
-        #  Sets Kernel Data space A0 to point to the first 8K physical memory
+        #  Sets Kernel Data space A0 to point to physical 0
         #  Sets Kernel Data space A7 to point to the IO page
         #  Sets User Instruction space A0 to point to physical 0o20000
         #  sets User Data space D0 to point to physical 0o40000
@@ -179,6 +181,40 @@ class TestMethods(unittest.TestCase):
                 p.run(pc=pc)
                 for rN, v in enumerate(rslts):
                     self.assertEqual(p.r[rN], v)
+
+    def test_mfpxsp(self):
+        cn = self.usefulconstants()
+        insts = (
+            # gotta turn mapping back off for these...
+            0o005037, cn.MMR0,         # CLR MMR0
+            0o012737, 0o14000, 0o34,   # mov $14000,*#34
+            0o005037, 0o36,            # clear *#36 .. perfectly fine PSW
+
+            0o012700, 0o20000,         # mov #20000,r0
+            0o012720, 0o010206,       # put into user 0: mov r2,r6
+            0o012720, 0o104400,       # put into user 2: trap 0
+
+            0o012702, 0o123456,       # put 123456 into R2
+            0o012746, 0o140340,       # push user-ish PSW onto kernel stack
+            0o005046,                 # new user PC == 0
+            0o005237, cn.MMR0,        # back on with the mapping!
+
+            0o000006,                 # RTT -- goes to user mode, addr 0
+        )
+
+        p, pc = self.simplemapped_pdp(addons=insts)
+
+        # put the trap handler at 14000 as expected
+        traph = (
+            0o106506,     # mfpd sp
+            0o012603,     # pop stack into r3
+            0
+        )
+
+        self.loadphysmem(p, traph, 0o14000)
+        p.instlog = True
+        p.run(pc=pc)
+        self.assertEqual(p.r[2], p.r[3])
 
     def test_mtpi(self):
         # need an instance just for the constants, meh
