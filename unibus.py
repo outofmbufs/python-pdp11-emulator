@@ -32,6 +32,7 @@ class UNIBUS:
         self.cpu = cpu
         self.mmio = MMIO(cpu)
         self.intmgr = InterruptManager()
+        self.logger = cpu.logger
 
     def resetbus(self):
         self.mmio.resetdevices()
@@ -54,8 +55,8 @@ class UNIBUS_1170(UNIBUS):
         ubanum, hi22 = divmod(addr - self.UBMAP_OFFS, 4)
         uba22 = self.ubas[ubanum]
 
-        self.cpu.logger.debug(f"UBA addr={oct(addr)}, {value=}")
-        self.cpu.logger.debug(f"{ubanum=}, {hi22=}")
+        self.logger.debug(f"UBA addr={oct(addr)}, {value=}")
+        self.logger.debug(f"{ubanum=}, {hi22=}")
 
         if value is None:
             if hi22 == 0:
