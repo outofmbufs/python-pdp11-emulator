@@ -159,7 +159,6 @@ class PDP11:
     def __init__(self, *,
                  physmem=None,     # default will be 512KB
                  unibus=None,      # subclasses may want to supply variant
-                 console=True,     # automated tests need to turn this off
                  logger="pdp11", loglevel='INFO',
                  instlog=False, pswlog=False):
 
@@ -244,20 +243,8 @@ class PDP11:
         # start off in halted state until .run() happens
         self.halted = True
 
-        # The console, the disk drive, and the clock are never really
-        # accessed directly (everything is triggered through mmio I/O)
-        # but of course must be instantiated
-        if console:                        # it's helpful to disable for tests
-            self._KL = KL11(self.ub)
-        try:
-            rp = RPRM(self.ub)
-        except FileNotFoundError:
-            self.logger.info("NO DISK DRIVE FILE FOUND; DISK DISABLED")
-        else:
-            self._RP = rp
-
-        # line clock
-        self._KW = KW11(self.ub)
+        # device instances; see add_device
+        self.devices = {}
 
     def physRW(self, physaddr, value=None):
         """like MMU.wordRW but takes physical addresses."""
@@ -294,6 +281,49 @@ class PDP11:
         except IndexError:
             raise PDPTraps.AddressError(
                 cpuerr=self.CPUERR_BITS.NXM) from None
+
+    # "associate" an emulated device
+    #
+    # Typically a device is instantiated by passing the unibus
+    # attribute ('ub') of a PDP11 instance to its __init__ function:
+    #
+    #       # p is a PDP11 instance
+    #       # XYZ11 is a device class
+    #
+    #       device_instance = XYZ11(p.ub)
+    #
+    # The device __init__ will typically use ub.mmio.register to connect up
+    # to its UNIBUS addresses. That's all that needs to happen.
+    #
+    # Nevertheless, on general principles, it seems like the pdp instance
+    # should "know" about its devices, so ... this method.
+    #
+    # The typical code sequence would be:
+    #        p = PDP1170()
+    #        p.associate_device(XY11(p.ub), 'XY')
+    #        p.associate_device(AB11(p.ub), 'AB')
+    # etc., combining instantiation ("XY11(p.ub)") and name association.
+    #
+    # HOWEVER, note that this works just as well:
+    #        p = PDP1170()
+    #        _ = XY11(p.ub)
+    #        _ = AB11(p.ub)
+    # the devices just won't be discoverable via the devices attribute.
+    # Device discovery via the devices attribute is not "architectural",
+    # but may be useful for some test programs or other introspection.
+    #
+    def associate_device(self, dev, device_name=None, /):
+        """Associate the device instance 'dev' with 'device_name'
+
+        If device_name is None then  __class__.__name__ is used.
+        """
+        if device_name is None:
+            device_name = dev.__class__.__name__
+
+        try:
+            self.devices[device_name].append(dev)
+        except KeyError:
+            self.devices[device_name] = [dev]
 
     # this the heart of all things related to 6-bit instruction operands.
     #    If value is not given this will be a read
@@ -553,7 +583,7 @@ class PDP11:
         if steps is None:
             stepsgen = itertools.count()
         else:
-            stepsgen = range(steps)
+            stepsgen = range(steps-1)
 
         try:
             stoppc, stopmode = stopat
@@ -562,6 +592,7 @@ class PDP11:
             stopmode = None
 
         def _evalstop():
+            icount = 0      # needed if steps == 1
             for icount in stepsgen:
 
                 # this is sneaky ... it's can be handy in debugging to
@@ -709,12 +740,12 @@ class PDP11:
     # Pulled out so can be overridden for specific debugging sceanrios.
     def instlogging(self, inst, pc):
         try:
-            logit = self.instlog(self, inst, thisPC)
+            logit = self.instlog(self, inst, pc)
         except TypeError:
             logit = True
         if logit:
             m = "KS!U"[self.psw_curmode]
-            self.logger.debug(f"{oct(thisPC)}/{m} :: {oct(inst)}")
+            self.logger.debug(f"{oct(pc)}/{m} :: {oct(inst)}")
 
     @property
     def swleds(self):
