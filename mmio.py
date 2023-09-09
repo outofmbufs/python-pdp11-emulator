@@ -50,6 +50,9 @@ class MMIO:
     #           else:
     #               ... this is the write case
     #
+    # Zero, of course, is a possible and common value to write, so do not make
+    # the rookie mistake of testing value for truthiness; test for *is* None.
+    #
     # The ioaddr will always be relative to the base of the I/O page:
     #            (ioaddr & 8191) == ioaddr   will always be True
     #
@@ -127,15 +130,15 @@ class MMIO:
     # The PDP-11 RESET instruction causes the UNIBUS to be reset.
     # Devices that want to know about this should:
     #
-    #      mmio.devicereset_reigster(resetfunc)
+    #      mmio.devicereset_register(resetfunc)
     #
     # And then resetfunc will be invoked as:
     #        resetfunc(mmio.ub)
     # (i.e., passed a single argument, the UNIBUS object).
     #
     # For dead-simple cases, the optional reset=True argument can be
-    # supplied, which casues register() to also arrange for the iofunc
-    # to be called at RESET time, like this:
+    # supplied to register(), which will cause it to also arrange for the
+    # iofunc to be called at RESET time, like this:
     #
     #       iofunc(baseaddr, 0)
     #
@@ -204,6 +207,7 @@ class MMIO:
             self.mmiomap[idx+i] = iofunc
         return offsetaddr
 
+    # wrap an I/O function with code that automatically handles byte writes.
     def _byte_wrapper(self, iofunc):
         def byteme(ioaddr, value=None, /, *, opsize=2):
             if (value is None) or (opsize == 2):
