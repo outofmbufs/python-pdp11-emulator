@@ -69,7 +69,7 @@ class RPRM:
     def __init__(self, ub, baseoffs=RPADDR_OFFS):
         self.addr = baseoffs
         self.ub = ub
-        self.logger = ub.cpu.logger
+        self.logger = ub.logger
 
         self.command_history = [(0, tuple())] * 100
         # XXX needs to be configurable somehow
