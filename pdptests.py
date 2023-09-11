@@ -29,6 +29,7 @@ import random
 
 from pdpasmhelper import PDP11InstructionAssembler as ASM
 
+
 class TestMethods(unittest.TestCase):
 
     PDPLOGLEVEL = 'INFO'
@@ -85,6 +86,7 @@ class TestMethods(unittest.TestCase):
         ns.UDSA0 = ns.UISA0 + 0o20
 
         ns.MMR0 = cls.ioaddr(p, p.mmu.MMR0_OFFS)
+        ns.MMR3 = cls.ioaddr(p, p.mmu.MMR3_OFFS)
 
         return ns
 
@@ -96,12 +98,16 @@ class TestMethods(unittest.TestCase):
     #    User Data space seg 0 points to physical 0o40000
     # and turns on the MMU
     #
+    # premmu is an optional list of instructions to execute
+    # before turning on the MMU
+    #
+    # postmmu is an optional list of instructions to execute
+    # after turning on the MMU
+    #
 
-    def simplemapped_pdp(self, p=None, addons=[]):
+    def simplemapped_pdp(self, p=None, *, premmu=[], postmmu=[]):
         if p is None:
             p = self.make_pdp()
-
-        asm = ASM()
 
         cn = self.usefulconstants()
 
@@ -120,126 +126,132 @@ class TestMethods(unittest.TestCase):
         # These instructions will be placed at 2K in memory
         #
 
-        asm.startblock()
-        asm.mov(0o20000, 'sp')           # start system stack at 8k 
+        with ASM.newsequence() as a:
+            a.mov(0o20000, 'sp')           # start system stack at 8k
 
-        # write the constants as described above
-        asm.mov(0o22222, asm.ptr(0o20000)) 
-        asm.mov(0o33333, asm.ptr(0o20002)) 
-        asm.mov(0o44444, asm.ptr(0o40000)) 
+            # write the constants as described above
+            a.mov(0o22222, a.ptr(0o20000))
+            a.mov(0o33333, a.ptr(0o20002))
+            a.mov(0o44444, a.ptr(0o40000))
 
-        # point both kernel seg 0 PARs to physical zero
-        asm.clr(asm.ptr(cn.KISA0)) 
-        asm.clr(asm.ptr(cn.KDSA0)) 
+            # point both kernel seg 0 PARs to physical zero
+            a.clr(a.ptr(cn.KISA0))
+            a.clr(a.ptr(cn.KDSA0))
 
-        # kernel seg 7 D space PAR to I/O page (at 22-bit location)
-        asm.mov(0o017760000 >> 6, asm.ptr(cn.KDSA0 + (7 * 2))) 
+            # kernel seg 7 D space PAR to I/O page (at 22-bit location)
+            a.mov(0o017760000 >> 6, a.ptr(cn.KDSA0 + (7 * 2)))
 
-        # user I seg 0 to 0o20000, user D seg 0 to 0o40000
-        asm.mov(0o20000 >> 6, asm.ptr(cn.UISA0)) 
-        asm.mov(0o40000 >> 6, asm.ptr(cn.UDSA0)) 
+            # user I seg 0 to 0o20000, user D seg 0 to 0o40000
+            a.mov(0o20000 >> 6, a.ptr(cn.UISA0))
+            a.mov(0o40000 >> 6, a.ptr(cn.UDSA0))
 
-        # set the PDRs for segment zero
-        asm.mov(0o077406, 'r3') 
-        # 77406 = PDR<2:0> = ACF = 0o110 = read/write
-        #         PLF<14:8> =0o0774 = full length (128*64 bytes = 8K)
+            # set the PDRs for segment zero
+            a.mov(0o077406, 'r3')
+            # 77406 = PDR<2:0> = ACF = 0o110 = read/write
+            #         PLF<14:8> =0o0774 = full length (128*64 bytes = 8K)
 
-        asm.mov('r3', asm.ptr(cn.KISD0)) 
-        asm.mov('r3', asm.ptr(cn.KDSD0)) 
-        asm.mov('r3', asm.ptr(cn.UISD0)) 
-        asm.mov('r3', asm.ptr(cn.UDSD0)) 
+            a.mov('r3', a.ptr(cn.KISD0))
+            a.mov('r3', a.ptr(cn.KDSD0))
+            a.mov('r3', a.ptr(cn.UISD0))
+            a.mov('r3', a.ptr(cn.UDSD0))
 
-        # PDR for segment 7
-        asm.mov('r3', asm.ptr(cn.KDSD0 + (7 * 2))) 
+            # PDR for segment 7
+            a.mov('r3', a.ptr(cn.KDSD0 + (7 * 2)))
 
-        # set previous mode to USER, keeping current mode KERNEL, pri 7
-        asm.mov((p.KERNEL << 14) | (p.USER << 12) | (7 << 5),
-                asm.ptr(self.ioaddr(p, p.PS_OFFS)))
+            # set previous mode to USER, keeping current mode KERNEL, pri 7
+            a.mov((p.KERNEL << 14) | (p.USER << 12) | (7 << 5),
+                  a.ptr(self.ioaddr(p, p.PS_OFFS)))
 
-        # turn on 22-bit mode, unibus mapping, and I/D sep for k & u
-        asm.mov(0o000065, asm.ptr(self.ioaddr(p, p.mmu.MMR3_OFFS)))
+            # turn on 22-bit mode, unibus mapping, and I/D sep for k & u
+            a.mov(0o000065, a.ptr(cn.MMR3))
 
-        # turn on relocation mode ... yeehah! (MMR0 known zero here)
-        asm.inc(asm.ptr(self.ioaddr(p, p.mmu.MMR0_OFFS)))
+            # Instructions supplied by caller, to be execute before
+            # enabling the MMU. They are "literals" since they have
+            # already been assembled.
+            for w in premmu:
+                a.literal(w)
 
+            # turn on relocation mode ...
+            a.inc(a.ptr(cn.MMR0))
 
-        asm.addtoblock(addons)
-        asm.halt()
-        setup_instructions = asm.endblock()
+            # and the post-MMU instructions
+            for w in postmmu:
+                a.literal(w)
+            a.halt()
 
         instloc = 0o4000             # 2K
-        
-        self.loadphysmem(p, setup_instructions, instloc)
+        self.loadphysmem(p, a.sequence(), instloc)
         return p, instloc
 
     # these tests end up testing a other stuff too of course, including MMU
     def test_mfpi(self):
-        # ((r0, ..., rN) results, (instructions)), ...
-        tvecs = (
 
-            # r1=2, mfpi (r1) -> r0; expect r0 = 33333
-            ((0o33333,), (0o012701, 0o02, 0o006511, 0o012600)),
+        tvecs = []
 
-            # r1=0, mfpi (r1) -> r0; expect r0 = 22222
-            ((0o22222,), (0o012701, 0o00, 0o006511, 0o012600)),
-            )
+        for result, r1tval in ((0o33333, 2), (0o22222, 0)):
+            # r1=r1tval, mfpi (r1) -> r0; expect r0 = result
+            with ASM.newsequence() as a:
+                a.mov(r1tval, 'r1')
+                a.mfpi('(r1)')
+                a.mov('(sp)+', 'r0')
+            tvecs.append((result, a.sequence()))
 
-        for rslts, insts in tvecs:
-            with self.subTest(rslts=rslts, insts=insts):
-                p, pc = self.simplemapped_pdp(addons=insts)
+        for result, insts in tvecs:
+            with self.subTest(result=result, insts=insts):
+                p, pc = self.simplemapped_pdp(postmmu=insts)
                 p.run(pc=pc)
-                for rN, v in enumerate(rslts):
-                    self.assertEqual(p.r[rN], v)
+                self.assertEqual(p.r[0], result)
 
     def test_mfpxsp(self):
         cn = self.usefulconstants()
-        insts = (
-            # gotta turn mapping back off for these...
-            0o005037, cn.MMR0,         # CLR MMR0
-            0o012737, 0o14000, 0o34,   # mov $14000,*#34
-            0o005037, 0o36,            # clear *#36 .. perfectly fine PSW
 
-            0o012700, 0o20000,         # mov #20000,r0
-            0o012720, 0o010206,       # put into user 0: mov r2,r6
-            0o012720, 0o104400,       # put into user 2: trap 0
+        # these two instructions are needed as literals in the test sequence
+        with ASM.newsequence() as u:
+            u.mov('r2', 'r6')
+            u.trap(0)
+        user_mode_instructions = u.sequence()
 
-            0o012702, 0o123456,       # put 123456 into R2
-            0o012746, 0o140340,       # push user-ish PSW onto kernel stack
-            0o005046,                 # new user PC == 0
-            0o005237, cn.MMR0,        # back on with the mapping!
+        with ASM.newsequence() as premmu:
+            ts = premmu                    # just for brevity...
+            ts.mov(0o14000, ts.ptr(0o34))  # set vector 034 to 14000
+            ts.clr(ts.ptr(0o36))           # PSW for trap - zero work
+            ts.mov(0o20000, 'r0')          # mov #20000,r0
 
-            0o000006,                 # RTT -- goes to user mode, addr 0
-        )
+            for uinst in user_mode_instructions:
+                ts.mov(uinst, '(r0)+')
+            ts.mov(0o123456, 'r2')         # mov #123456,r2
+            ts.mov(0o140340, '-(sp)')      # push user-ish PSW to K stack
+            ts.clr('-(sp)')                # new user PC = 0
 
-        p, pc = self.simplemapped_pdp(addons=insts)
+        with ASM.newsequence() as postmmu:
+            postmmu.literal(6)             # RTT - goes to user mode, addr 0
+
+        p, pc = self.simplemapped_pdp(premmu=premmu.sequence(),
+                                      postmmu=postmmu.sequence())
 
         # put the trap handler at 14000 as expected
-        traph = (
-            0o106506,     # mfpd sp
-            0o012603,     # pop stack into r3
-            0
-        )
-
-        self.loadphysmem(p, traph, 0o14000)
-        p.instlog = True
+        with ASM.newsequence() as th:
+            th.mfpd('sp')
+            th.mov('(sp)+', 'r3')
+            th.halt()
+        self.loadphysmem(p, th.sequence(), 0o14000)
         p.run(pc=pc)
         self.assertEqual(p.r[2], p.r[3])
 
     def test_mtpi(self):
-        # need an instance just for the constants, meh
-        px = self.make_pdp()
+        cn = self.usefulconstants()
+
         tvecs = (
-            ((0o1717,), (0o012746, 0o1717, 0o006637, 0o02,
-                         # turn MMU back off (!)
-                         0o005037, self.ioaddr(px, px.mmu.MMR0_OFFS),
-                         0o013700, 0o20002)),
+            (0o1717, (0o012746, 0o1717, 0o006637, 0o02,
+                      # turn MMU back off (!)
+                      0o005037, cn.MMR0,
+                      0o013700, 0o20002)),
             )
-        for rslts, insts in tvecs:
-            with self.subTest(rslts=rslts, insts=insts):
-                p, pc = self.simplemapped_pdp(addons=insts)
+        for r0result, insts in tvecs:
+            with self.subTest(r0result=r0result, insts=insts):
+                p, pc = self.simplemapped_pdp(postmmu=insts)
                 p.run(pc=pc)
-                for rN, v in enumerate(rslts):
-                    self.assertEqual(p.r[rN], v)
+                self.assertEqual(p.r[0], r0result)
 
     def test_add_sub(self):
         p = self.make_pdp()
@@ -258,10 +270,12 @@ class TestMethods(unittest.TestCase):
         add_loc = testloc
         sub_loc = testloc + 4
 
-        p.physmem[add_loc >> 1] = 0o060001    # ADD R0,R1
-        p.physmem[(add_loc >> 1) + 1] = 0
-        p.physmem[sub_loc >> 1] = 0o160001    # SUB R0,R1
-        p.physmem[(sub_loc >> 1) + 1] = 0
+        for addsub, loc in (('add', add_loc), ('sub', sub_loc)):
+            with ASM.newsequence() as a:
+                getattr(a, addsub)('r0', 'r1')
+                a.halt()
+            for offs, inst in enumerate(a.sequence()):
+                p.physmem[(loc >> 1) + offs] = inst
 
         for r0, r1, added, a_nzvc, subbed, s_nzvc in testvecs:
             with self.subTest(r0=r0, r1=r1, op="add"):

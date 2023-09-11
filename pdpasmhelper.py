@@ -28,6 +28,9 @@
 #   are focused around helping to create hand-constructed test code.
 #
 
+import contextlib
+
+
 class PDP11InstructionAssembler:
     B6MODES = {}
     _rnames = [(f"R{_i}", _i) for _i in range(8)] + [("SP", 6), ("PC", 7)]
@@ -40,19 +43,11 @@ class PDP11InstructionAssembler:
         B6MODES[f"@-({_rn})"] = 0o50 | _i   # autodecr deferred
     del _i, _rn, _rnames
 
-    def __init__(self):
-        self.activeblock = None
+    @classmethod
+    def newsequence(cls):
+        return _Sequence()
 
-    def startblock(self):
-        self.activeblock = []
-
-    def addtoblock(self, insts):
-        if self.activeblock is not None:
-            self.activeblock += insts
-        return insts
-
-    def endblock(self):
-        insts, self.activeblock = self.activeblock, None
+    def append_seq(self, insts):
         return insts
 
     def immediate_value(self, s):
@@ -125,7 +120,7 @@ class PDP11InstructionAssembler:
             return [self.B6MODES[operand]]
         except KeyError:
             pass
-        
+
         # last chance: X(Rn) and @X(rn)
 
         # see if X(Rn) or @X(Rn)...
@@ -149,72 +144,97 @@ class PDP11InstructionAssembler:
             b6 = self.B6MODES['(' + s[1]]
         except KeyError:
             raise valerr() from None
+        seq = [mode | (b6 & 0o07), idxval]
+        try:
+            self.append_seq(seq)
+        except AttributeError:
+            pass
+        return seq
 
-        return [mode | (b6 & 0o07), idxval]
+    # no-op here, but overridden in _Sequence to track generated instructions
+    def _seqwords(self, seq):
+        return seq
 
     def _2op(self, operation, src, dst):
         src6, *src_i = self.operand_parser(src)
         dst6, *dst_i = self.operand_parser(dst)
-        return [ operation | src6 << 6 | dst6, *src_i, *dst_i ]
+        return self._seqwords([operation | src6 << 6 | dst6, *src_i, *dst_i])
 
     def _1op(self, operation, dst):
         dst6, *dst_i = self.operand_parser(dst)
-        return [ operation | dst6, *dst_i ]
+        return self._seqwords([operation | dst6, *dst_i])
 
     def mov(self, src, dst):
-        return self.addtoblock(self._2op(0o010000, src, dst))
+        return self._2op(0o010000, src, dst)
+
+    def cmp(self, src, dst):
+        return self._2op(0o020000, src, dst)
+
+    def add(self, src, dst):
+        return self._2op(0o060000, src, dst)
+
+    def sub(self, src, dst):
+        return self._2op(0o160000, src, dst)
 
     def clr(self, dst):
-        return self.addtoblock(self._1op(0o005000, dst))
+        return self._1op(0o005000, dst)
 
     def inc(self, dst):
-        return self.addtoblock(self._1op(0o005200, dst))
+        return self._1op(0o005200, dst)
 
     def halt(self):
-        return self.addtoblock([0])
+        return self.literal(0)
 
-        xxx = """
-        
-            0o012706, 0o20000,       # put system stack at 8k and works down
+    def mtpi(self, dst):
+        return self._1op(0o006600, dst)
 
-            0o012737, 0o22222, 0o20000,
-            0o012737, 0o33333, 0o20002,
-            0o012737, 0o44444, 0o40000,
+    def mfpi(self, src):
+        return self._1op(0o006500, src)
 
-            # point both kernel seg 0 PARs to physical zero
-            0o005037, cn.KISA0,         # CLR $KISA0
-            0o005037, cn.KDSA0,         # CLR $KDSA0
+    def mtpd(self, dst):
+        return self._1op(0o106600, dst)
 
-            # kernel seg 7 D space PAR to I/O page (at 22-bit location)
-            0o012737, 0o017760000 >> 6, cn.KDSA0 + (7 * 2),
+    def mfpd(self, src):
+        return self._1op(0o106500, src)
 
-            # user I seg 0 to 0o20000, user D seg 0 to 0o40000
-            0o012737, 0o20000 >> 6, cn.UISA0,
-            0o012737, 0o40000 >> 6, cn.UDSA0,
+    def trap(self, tnum):
+        return self.literal(0o104400 | tnum)
 
-            # set the PDRs for segment zero
-
-            0o012703, 0o077406,      # MOV #77406,R3
-            # 77406 = PDR<2:0> = ACF = 0o110 = read/write
-            #         PLF<14:8> =0o0774 = full length (128*64 bytes = 8K)
-            0o010337, cn.KISD0,         # MOV R3,KISD0 ...
-            0o010337, cn.KDSD0,
-            0o010337, cn.UISD0,
-            0o010337, cn.UDSD0,
-            # PDR for segment 7
-            0o010337, cn.KDSD0 + (7 * 2),
+    # generally used for instructions not implemented by an explicit method
+    # Allows for one (or none) operand in the low 6 bits
+    def literal(self, inst, oprnd=None, /):
+        if oprnd is not None:
+            return self._1op(inst, oprnd)
+        else:
+            return self._seqwords(inst)
 
 
-            # set previous mode to USER, keeping current mode KERNEL, pri 7
-            0o012737, (p.KERNEL << 14) | (p.USER << 12) | (7 << 5),
-            self.ioaddr(p, p.PS_OFFS),
+# this is used for WITH ... it is mostly for the notational convenience
+# of being able to do thing like
+#        with ASM.sequence() as u:
+#            u.mov('r2','r6')
+#            u.trap(0)
+#        user_mode_instructions = u.sequence()
 
-            # turn on 22-bit mode, unibus mapping, and I/D sep for k & u
-            0o012737, 0o000065, self.ioaddr(p, p.mmu.MMR3_OFFS),
+class _Sequence(PDP11InstructionAssembler, contextlib.AbstractContextManager):
+    def __init__(self):
+        super().__init__()
+        self._seq = []
 
-            # turn on relocation mode ... yeehah! (MMR0 known zero here)
-            0o005237, self.ioaddr(p, p.mmu.MMR0_OFFS),   # INC MMR0
-            )
+    def __enter__(self):
+        return self
 
-"""
-        
+    def __exit__(self, *args, **kwargs):
+        return None
+
+    def _seqwords(self, seq):
+        """seq can be an iterable, or a naked (integer) instruction."""
+        if self._seq is not None:
+            try:
+                self._seq += seq
+            except TypeError:
+                self._seq += [seq]
+        return seq
+
+    def sequence(self):
+        return self._seq
