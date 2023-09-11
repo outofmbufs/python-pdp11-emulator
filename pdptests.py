@@ -241,12 +241,14 @@ class TestMethods(unittest.TestCase):
     def test_mtpi(self):
         cn = self.usefulconstants()
 
-        tvecs = (
-            (0o1717, (0o012746, 0o1717, 0o006637, 0o02,
-                      # turn MMU back off (!)
-                      0o005037, cn.MMR0,
-                      0o013700, 0o20002)),
-            )
+        with ASM.newsequence() as ts:
+            ts.mov(0o1717, '-(sp)')        # pushing 0o1717
+            ts.mtpi(ts.ptr(0o02))          # and MTPI it to user location 2
+            ts.clr(ts.ptr(cn.MMR0))        # turn MMU back off
+            ts.mov(ts.ptr(0o20002), 'r0')  # r0 = (020002)
+
+        tvecs = ((0o1717, ts.sequence()),)
+
         for r0result, insts in tvecs:
             with self.subTest(r0result=r0result, insts=insts):
                 p, pc = self.simplemapped_pdp(postmmu=insts)
@@ -317,7 +319,8 @@ class TestMethods(unittest.TestCase):
     def test_cc(self):
         # various condition code tests
         p = self.make_pdp()
-        insts = (
+
+        with ASM.newsequence() as ts:
             # program is:
             #       CLR R0
             #       BEQ 1f
@@ -344,19 +347,30 @@ class TestMethods(unittest.TestCase):
             #
             # Given that, after running the program R0 should be 65553
 
-            0o005000, 0o101401, 0o0, 0o000257, 0o001001, 0, 0o005300,
+            ts.clr('r0')
+            ts.literal(0o101401)     # BEQ 1f
+            ts.halt()
+            ts.literal(0o000257)     # 1f: CCC
+            ts.literal(0o001001)     # BNE 1f
+            ts.halt()
+            ts.dec('r0')
 
-            # MOV @#5000 etc
-            0o013701, 0o5000, 0o013702, 0o5002,
+            ts.mov(ts.ptr(0o5000), 'r1')
+            ts.mov(ts.ptr(0o5002), 'r2')
 
             # CMP R1,R2 BLE
-            0o020102, 0o003401, 0, 0o005300,
+            ts.cmp('r1', 'r2')
+            ts.literal(0o003401)     # BLE 1f
+            ts.halt()
+            ts.dec('r0')
 
-            # CMP R2,R1 BGT
-            0o020201, 0o003001, 0, 0o005300,
+            ts.cmp('r2', 'r1')
+            ts.literal(0o003001)     # BGT 1f
+            ts.halt()
+            ts.dec('r0')
+            ts.halt()
 
-            0)
-
+        insts = ts.sequence()
         instloc = 0o4000
         self.loadphysmem(p, insts, instloc)
 
