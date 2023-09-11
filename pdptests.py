@@ -20,7 +20,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from itertools import chain
 from types import SimpleNamespace
 
 from machine import PDP1170
@@ -28,6 +27,7 @@ from pdptraps import PDPTraps
 import unittest
 import random
 
+from pdpasmhelper import PDP11InstructionAssembler as ASM
 
 class TestMethods(unittest.TestCase):
 
@@ -101,6 +101,8 @@ class TestMethods(unittest.TestCase):
         if p is None:
             p = self.make_pdp()
 
+        asm = ASM()
+
         cn = self.usefulconstants()
 
         # this is a table of instructions that ...
@@ -117,50 +119,57 @@ class TestMethods(unittest.TestCase):
         #
         # These instructions will be placed at 2K in memory
         #
-        setup_instructions = (
-            0o012706, 0o20000,       # put system stack at 8k and works down
 
-            0o012737, 0o22222, 0o20000,
-            0o012737, 0o33333, 0o20002,
-            0o012737, 0o44444, 0o40000,
+        asm.startblock()
+        asm.mov(0o20000, 'sp')           # start system stack at 8k 
 
-            # point both kernel seg 0 PARs to physical zero
-            0o005037, cn.KISA0,         # CLR $KISA0
-            0o005037, cn.KDSA0,         # CLR $KDSA0
+        # write the constants as described above
+        asm.mov(0o22222, asm.ptr(0o20000)) 
+        asm.mov(0o33333, asm.ptr(0o20002)) 
+        asm.mov(0o44444, asm.ptr(0o40000)) 
 
-            # kernel seg 7 D space PAR to I/O page (at 22-bit location)
-            0o012737, 0o017760000 >> 6, cn.KDSA0 + (7 * 2),
+        # point both kernel seg 0 PARs to physical zero
+        asm.clr(asm.ptr(cn.KISA0)) 
+        asm.clr(asm.ptr(cn.KDSA0)) 
 
-            # user I seg 0 to 0o20000, user D seg 0 to 0o40000
-            0o012737, 0o20000 >> 6, cn.UISA0,
-            0o012737, 0o40000 >> 6, cn.UDSA0,
+        # kernel seg 7 D space PAR to I/O page (at 22-bit location)
+        asm.mov(0o017760000 >> 6, asm.ptr(cn.KDSA0 + (7 * 2))) 
 
-            # set the PDRs for segment zero
+        # user I seg 0 to 0o20000, user D seg 0 to 0o40000
+        asm.mov(0o20000 >> 6, asm.ptr(cn.UISA0)) 
+        asm.mov(0o40000 >> 6, asm.ptr(cn.UDSA0)) 
 
-            0o012703, 0o077406,      # MOV #77406,R3
-            # 77406 = PDR<2:0> = ACF = 0o110 = read/write
-            #         PLF<14:8> =0o0774 = full length (128*64 bytes = 8K)
-            0o010337, cn.KISD0,         # MOV R3,KISD0 ...
-            0o010337, cn.KDSD0,
-            0o010337, cn.UISD0,
-            0o010337, cn.UDSD0,
-            # PDR for segment 7
-            0o010337, cn.KDSD0 + (7 * 2),
+        # set the PDRs for segment zero
+        asm.mov(0o077406, 'r3') 
+        # 77406 = PDR<2:0> = ACF = 0o110 = read/write
+        #         PLF<14:8> =0o0774 = full length (128*64 bytes = 8K)
+
+        asm.mov('r3', asm.ptr(cn.KISD0)) 
+        asm.mov('r3', asm.ptr(cn.KDSD0)) 
+        asm.mov('r3', asm.ptr(cn.UISD0)) 
+        asm.mov('r3', asm.ptr(cn.UDSD0)) 
+
+        # PDR for segment 7
+        asm.mov('r3', asm.ptr(cn.KDSD0 + (7 * 2))) 
+
+        # set previous mode to USER, keeping current mode KERNEL, pri 7
+        asm.mov((p.KERNEL << 14) | (p.USER << 12) | (7 << 5),
+                asm.ptr(self.ioaddr(p, p.PS_OFFS)))
+
+        # turn on 22-bit mode, unibus mapping, and I/D sep for k & u
+        asm.mov(0o000065, asm.ptr(self.ioaddr(p, p.mmu.MMR3_OFFS)))
+
+        # turn on relocation mode ... yeehah! (MMR0 known zero here)
+        asm.inc(asm.ptr(self.ioaddr(p, p.mmu.MMR0_OFFS)))
 
 
-            # set previous mode to USER, keeping current mode KERNEL, pri 7
-            0o012737, (p.KERNEL << 14) | (p.USER << 12) | (7 << 5),
-            self.ioaddr(p, p.PS_OFFS),
-
-            # turn on 22-bit mode, unibus mapping, and I/D sep for k & u
-            0o012737, 0o000065, self.ioaddr(p, p.mmu.MMR3_OFFS),
-
-            # turn on relocation mode ... yeehah! (MMR0 known zero here)
-            0o005237, self.ioaddr(p, p.mmu.MMR0_OFFS),   # INC MMR0
-            )
+        asm.addtoblock(addons)
+        asm.halt()
+        setup_instructions = asm.endblock()
 
         instloc = 0o4000             # 2K
-        self.loadphysmem(p, chain(setup_instructions, addons, (0o0,)), instloc)
+        
+        self.loadphysmem(p, setup_instructions, instloc)
         return p, instloc
 
     # these tests end up testing a other stuff too of course, including MMU
