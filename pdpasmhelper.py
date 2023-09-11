@@ -182,6 +182,9 @@ class PDP11InstructionAssembler:
     def inc(self, dst):
         return self._1op(0o005200, dst)
 
+    def dec(self, dst):
+        return self._1op(0o005300, dst)
+
     def halt(self):
         return self.literal(0)
 
