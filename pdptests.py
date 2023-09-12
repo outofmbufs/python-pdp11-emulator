@@ -633,26 +633,26 @@ class TestMethods(unittest.TestCase):
         p.physmem[15] = 0
 
         # this trap handler puts the trap # into R3
-        handler = (
+        with ASM() as handler:
             # the saved PC is at the top of the stack ... get it
-            0o011600,              # MOV (SP),R0
+            handler.mov('(sp)', 'r0')
             # get the low byte of the instruction which is the trap code
-            # note that the PC points after the TRAP instruction so
-            # MOVB -2(R0),R3
-            0o116003, 0o177776,
-            # RTT
-            6)
-        self.loadphysmem(p, handler, 0o10000)
+            # note that the PC points after the TRAP instruction so:
+            handler.movb('-2(r0)', 'r3')
+            handler.rtt()
+
+        self.loadphysmem(p, handler.instructions(), 0o10000)
 
         # just bash a stack pointer directly in
         p.r[6] = 0o20000       # 8K and working down
 
         for i in range(256):
-            insts = (
-                0o104400 | i,      # TRAP #i
-                0o010301,          # MOV R3,R1 just to show RTT worked
-                0)
-            self.loadphysmem(p, insts, 0o30000)
+            with ASM() as a:
+                a.trap(i)          # TRAP #i
+                a.mov('r3', 'r1')  # MOV R3,R1 just to show RTT worked
+                a.halt()
+
+            self.loadphysmem(p, a.instructions(), 0o30000)
             p.run(pc=0o30000)
             self.assertEqual(p.r[3], p.r[1])
 
