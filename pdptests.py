@@ -23,6 +23,7 @@
 from types import SimpleNamespace
 
 from machine import PDP1170
+from branches import BRANCH_CODES
 from pdptraps import PDPTraps
 import unittest
 import random
@@ -331,10 +332,10 @@ class TestMethods(unittest.TestCase):
         with ASM() as a:
             a.clr('r1')             # if successful r1 will become goodval
             a.clr('r0')
-            a.literal(0o101401)     # BEQ +1
+            a.beq(+1)
             a.halt()                # stop here if BEQ fails
             a.literal(0o000257)     # 1f: CCC .. clear all the condition codes
-            a.literal(0o001001)     # BNE +1
+            a.bne(+1)
             a.halt()                # stop here if BNE fails
             a.mov(goodval, 'r1')    # indicate success
             a.halt()
@@ -386,7 +387,7 @@ class TestMethods(unittest.TestCase):
         # various condition code tests
         p = self.make_pdp()
 
-        insts = self._cc_unscc(0o3400, 0o3000)
+        insts = self._cc_unscc(BRANCH_CODES['blt'], BRANCH_CODES['bgt'])
 
         instloc = 0o4000
         self.loadphysmem(p, insts, instloc)
@@ -423,7 +424,7 @@ class TestMethods(unittest.TestCase):
         # more stuff like test_cc but specifically testing unsigned Bxx codes
         p = self.make_pdp()
 
-        insts = self._cc_unscc(0o103400, 0o101000)
+        insts = self._cc_unscc(BRANCH_CODES['blo'], BRANCH_CODES['bhi'])
         instloc = 0o4000
         self.loadphysmem(p, insts, instloc)
 

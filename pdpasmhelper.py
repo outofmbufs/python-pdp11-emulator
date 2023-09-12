@@ -29,6 +29,7 @@
 #
 
 from contextlib import AbstractContextManager
+from branches import BRANCH_CODES
 
 
 class PDP11InstructionAssembler:
@@ -276,28 +277,40 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         return curoffs
 
     # Branch instruction support only exists within a given InstructionBlock
-    def bxx_offset(self, name1, name2=None):
-        """Generate offset appropriate to Bxx between name1 and name2.
+    def bxx_offset(self, target, /):
+        """Generate offset for Bxx target
 
-        If name2 is None, generate offset, backwards, from current to name1.
+        A target can be a string label or a number. Numbers are taken as-is.
+        Names are looked up in the labels and offsets generated.
         """
 
         # XXX TODO XXX make forward references possible and automate the
         #              backpatching even if that gets one step closer
         #              to slowly implementing an entire assembler...
-        if name2 is None:
-            # +255 not 256 because account for the Bxx instruction itself
-            offs = self.labels[name1] - len(self) + 255
-        else:
-            raise ValueError("two name bxx_offset not yet implemented")
+        try:
+            if (target & 0o377) != target:
+                raise ValueError(f"branch target ({target}) too far")
+            return target
+        except TypeError:
+            pass
 
-        offs8 = offs & 0o377
-        if offs8 != offs:
-            raise ValueError(f"distance to {name1} too far.")
-        return offs8
+        # perhaps it is a label
+        try:
+            # +255 not 256 bcs the Bxx instruction itself
+            offs = self.labels[target] - len(self) + 255
+        except KeyError:
+            raise ValueError(f"can't find branch target '{target}'")
 
-    def bne(self, name):
-        return self.literal(0o001000 | self.bxx_offset(name))
+        if offs >= 0 and offs < 256:
+            return offs
+
+        raise ValueError(f"branch target ('{target}') too far.")
+
+    def bne(self, target):
+        return self.literal(BRANCH_CODES['bne'] | self.bxx_offset(target))
+
+    def beq(self, target):
+        return self.literal(BRANCH_CODES['beq'] | self.bxx_offset(target))
 
     def instructions(self):
         return self._instblock
