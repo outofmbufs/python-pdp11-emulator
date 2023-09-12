@@ -145,8 +145,7 @@ class PDP11InstructionAssembler:
             b6 = self.B6MODES['(' + s[1]]
         except KeyError:
             raise valerr() from None
-        seq = [mode | (b6 & 0o07), idxval]
-        return self._seqwords(seq)
+        return [mode | (b6 & 0o07), idxval]
 
     # no-op here, but overridden in _Sequence to track generated instructions
     def _seqwords(self, seq):
@@ -178,6 +177,9 @@ class PDP11InstructionAssembler:
     def mov(self, src, dst):
         return self._2op(0o010000, src, dst)
 
+    def movb(self, src, dst):
+        return self._2op(0o110000, src, dst)
+
     def cmp(self, src, dst):
         return self._2op(0o020000, src, dst)
 
@@ -201,6 +203,9 @@ class PDP11InstructionAssembler:
 
     def halt(self):
         return self.literal(0)
+
+    def rtt(self):
+        return self.literal(6)
 
     def mtpi(self, dst):
         return self._1op(0o006600, dst)
