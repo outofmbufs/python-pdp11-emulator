@@ -126,7 +126,7 @@ class TestMethods(unittest.TestCase):
         # These instructions will be placed at 2K in memory
         #
 
-        with ASM.instruction_block() as a:
+        with ASM() as a:
             a.mov(0o20000, 'sp')           # start system stack at 8k
 
             # write the constants as described above
@@ -180,7 +180,7 @@ class TestMethods(unittest.TestCase):
             a.halt()
 
         instloc = 0o4000             # 2K
-        self.loadphysmem(p, a.instruction_block(), instloc)
+        self.loadphysmem(p, a.instructions(), instloc)
         return p, instloc
 
     # these tests end up testing a other stuff too of course, including MMU
@@ -190,11 +190,11 @@ class TestMethods(unittest.TestCase):
 
         for result, r1tval in ((0o33333, 2), (0o22222, 0)):
             # r1=r1tval, mfpi (r1) -> r0; expect r0 = result
-            with ASM.instruction_block() as a:
+            with ASM() as a:
                 a.mov(r1tval, 'r1')
                 a.mfpi('(r1)')
                 a.mov('(sp)+', 'r0')
-            tvecs.append((result, a.instruction_block()))
+            tvecs.append((result, a.instructions()))
 
         for result, insts in tvecs:
             with self.subTest(result=result, insts=insts):
@@ -205,12 +205,12 @@ class TestMethods(unittest.TestCase):
     def test_mfpxsp(self):
         cn = self.usefulconstants()
 
-        with ASM.instruction_block() as u:
+        with ASM() as u:
             u.mov('r2', 'r6')
             u.trap(0)
-        user_mode_instructions = u.instruction_block()
+        user_mode_instructions = u.instructions()
 
-        with ASM.instruction_block() as premmu:
+        with ASM() as premmu:
             ts = premmu                    # just for brevity...
             ts.mov(0o14000, ts.ptr(0o34))  # set vector 034 to 14000
             ts.clr(ts.ptr(0o36))           # PSW for trap - zero work
@@ -222,31 +222,31 @@ class TestMethods(unittest.TestCase):
             ts.mov(0o140340, '-(sp)')      # push user-ish PSW to K stack
             ts.clr('-(sp)')                # new user PC = 0
 
-        with ASM.instruction_block() as postmmu:
+        with ASM() as postmmu:
             postmmu.literal(6)             # RTT - goes to user mode, addr 0
 
-        p, pc = self.simplemapped_pdp(premmu=premmu.instruction_block(),
-                                      postmmu=postmmu.instruction_block())
+        p, pc = self.simplemapped_pdp(premmu=premmu.instructions(),
+                                      postmmu=postmmu.instructions())
 
         # put the trap handler at 14000 as expected
-        with ASM.instruction_block() as th:
+        with ASM() as th:
             th.mfpd('sp')
             th.mov('(sp)+', 'r3')
             th.halt()
-        self.loadphysmem(p, th.instruction_block(), 0o14000)
+        self.loadphysmem(p, th.instructions(), 0o14000)
         p.run(pc=pc)
         self.assertEqual(p.r[2], p.r[3])
 
     def test_mtpi(self):
         cn = self.usefulconstants()
 
-        with ASM.instruction_block() as ts:
+        with ASM() as ts:
             ts.mov(0o1717, '-(sp)')        # pushing 0o1717
             ts.mtpi(ts.ptr(0o02))          # and MTPI it to user location 2
             ts.clr(ts.ptr(cn.MMR0))        # turn MMU back off
             ts.mov(ts.ptr(0o20002), 'r0')  # r0 = (020002)
 
-        tvecs = ((0o1717, ts.instruction_block()),)
+        tvecs = ((0o1717, ts.instructions()),)
 
         for r0result, insts in tvecs:
             with self.subTest(r0result=r0result, insts=insts):
@@ -272,10 +272,10 @@ class TestMethods(unittest.TestCase):
         sub_loc = testloc + 4
 
         for addsub, loc in (('add', add_loc), ('sub', sub_loc)):
-            with ASM.instruction_block() as a:
+            with ASM() as a:
                 getattr(a, addsub)('r0', 'r1')
                 a.halt()
-            for offs, inst in enumerate(a.instruction_block()):
+            for offs, inst in enumerate(a.instructions()):
                 p.physmem[(loc >> 1) + offs] = inst
 
         for r0, r1, added, a_nzvc, subbed, s_nzvc in testvecs:
@@ -295,10 +295,12 @@ class TestMethods(unittest.TestCase):
                 if s_nzvc is not None:
                     self.assertEqual(p.psw & 0o17, s_nzvc)
 
+    # test BNE (and, implicitly, INC/DEC)
     def test_bne(self):
         p = self.make_pdp()
         loopcount = 0o1000
-        insts = (
+
+        with ASM() as a:
             # Program is:
             #         MOV loopcount,R1
             #         CLR R0
@@ -306,69 +308,86 @@ class TestMethods(unittest.TestCase):
             #         DEC R1
             #         BNE LOOP
             #         HALT
-            0o012701, loopcount, 0o005000, 0o005200, 0o005301, 0o001375, 0)
+            a.mov(loopcount, 'r1')
+            a.clr('r0')
+            a.label('LOOP')
+            a.inc('r0')
+            a.dec('r1')
+            a.bne('LOOP')
+            a.halt()
 
         instloc = 0o4000
-        self.loadphysmem(p, insts, instloc)
+        self.loadphysmem(p, a.instructions(), instloc)
 
         p.run(pc=instloc)
         self.assertEqual(p.r[0], loopcount)
         self.assertEqual(p.r[1], 0)
 
+    # test BEQ and BNE (BNE was also tested in test_bne)
+    def test_eqne(self):
+        p = self.make_pdp()
+
+        goodval = 0o4321            # arbitrary, not zero
+        with ASM() as a:
+            a.clr('r1')             # if successful r1 will become goodval
+            a.clr('r0')
+            a.literal(0o101401)     # BEQ +1
+            a.halt()                # stop here if BEQ fails
+            a.literal(0o000257)     # 1f: CCC .. clear all the condition codes
+            a.literal(0o001001)     # BNE +1
+            a.halt()                # stop here if BNE fails
+            a.mov(goodval, 'r1')    # indicate success
+            a.halt()
+
+        instloc = 0o4000
+        self.loadphysmem(p, a.instructions(), instloc)
+        p.run(pc=instloc)
+        self.assertEqual(p.r[1], goodval)
+
+    # create the instruction sequence shared by test_cc and test_ucc
+    def _cc_unscc(self, br1, br2):
+        with ASM() as a:
+            # program is:
+            #       CLR R0
+            #       MOV @#05000,R1      ; see discussion below
+            #       MOV @#05002,R2      ; see discussion below
+            #       CMP R1,R2
+            #       br1 1f              ; see discussion
+            #       HALT
+            #    1: DEC R0
+            #       CMP R2,R1
+            #       br2 1f              ; see discussion
+            #       HALT
+            #    1: DEC R0
+            #       HALT
+            #
+            # The test_cc and test_unscc tests will poke various test
+            # cases into locations 5000 and 5002, knowing the order of
+            # the operands in the two CMP instructions and choosing
+            # test cases and br1/br2 accordingly.
+            #
+            # If the program makes it to the end R0 will be 65554 (-2)
+
+            a.clr('r0')
+            a.mov(a.ptr(0o5000), 'r1')
+            a.mov(a.ptr(0o5002), 'r2')
+            a.cmp('r1', 'r2')
+            a.literal((br1 & 0o177400) | 1)   # br1 1f
+            a.halt()
+            a.dec('r0')
+            a.cmp('r2', 'r1')
+            a.literal((br2 & 0o177400) | 1)   # br2 1f
+            a.halt()
+            a.dec('r0')
+            a.halt()
+        return a.instructions()
+
     def test_cc(self):
         # various condition code tests
         p = self.make_pdp()
 
-        with ASM.instruction_block() as ts:
-            # program is:
-            #       CLR R0
-            #       BEQ 1f
-            #       HALT
-            #    1: CCC
-            #       BNE 1f
-            #       HALT
-            #    1: DEC R0
+        insts = self._cc_unscc(0o3400, 0o3000)
 
-            #       MOV @#05000,R1      ; see discussion below
-            #       MOV @#05002,R2      ; see discussion below
-            #       CMP R1,R2
-            #       BLE 1f
-            #       HALT
-            #    1: DEC R0
-            #       CMP R2,R1
-            #       BGT 1f
-            #       HALT
-            #    1: DEC R0
-            #       HALT
-            #
-            # and the program will poke various test cases into locations
-            # 5000 and 5002, with the proviso that 5000 is always the lesser.
-            #
-            # Given that, after running the program R0 should be 65553
-
-            ts.clr('r0')
-            ts.literal(0o101401)     # BEQ 1f
-            ts.halt()
-            ts.literal(0o000257)     # 1f: CCC
-            ts.literal(0o001001)     # BNE 1f
-            ts.halt()
-            ts.dec('r0')
-
-            ts.mov(ts.ptr(0o5000), 'r1')
-            ts.mov(ts.ptr(0o5002), 'r2')
-
-            ts.cmp('r1', 'r2')
-            ts.literal(0o003401)     # BLE 1f
-            ts.halt()
-            ts.dec('r0')
-
-            ts.cmp('r2', 'r1')
-            ts.literal(0o003001)     # BGT 1f
-            ts.halt()
-            ts.dec('r0')
-            ts.halt()
-
-        insts = ts.instruction_block()
         instloc = 0o4000
         self.loadphysmem(p, insts, instloc)
 
@@ -384,7 +403,7 @@ class TestMethods(unittest.TestCase):
             p.physmem[0o5002 >> 1] = higher
             with self.subTest(lower=lower, higher=higher):
                 p.run(pc=instloc)
-                self.assertEqual(p.r[0], 65533)
+                self.assertEqual(p.r[0], 65534)
 
         # probably never a good idea, but ... do some random values
         for randoms in range(1000):
@@ -398,44 +417,13 @@ class TestMethods(unittest.TestCase):
             p.physmem[0o5002 >> 1] = s2c(b)
             with self.subTest(lower=a, higher=b):
                 p.run(pc=instloc)
-                self.assertEqual(p.r[0], 65533)
+                self.assertEqual(p.r[0], 65534)
 
     def test_unscc(self):
         # more stuff like test_cc but specifically testing unsigned Bxx codes
         p = self.make_pdp()
 
-        insts = (
-            # program is:
-            #       CLR R0
-            #       MOV @#05000,R1      ; see discussion below
-            #       MOV @#05002,R2      ; see discussion below
-            #       CMP R1,R2
-            #       BCS 1f              ; BCS same as BLO
-            #       HALT
-            #    1: DEC R0
-            #       CMP R2,R1
-            #       BHI 1f
-            #       HALT
-            #    1: DEC R0
-            #       HALT
-            #
-            # test values in 5000,5002 .. unsigned and 5002 always higher
-            #
-            # Given that, after running the program R0 should be 65534
-
-            0o005000,
-
-            # MOV @#5000 etc
-            0o013701, 0o5000, 0o013702, 0o5002,
-
-            # CMP R1,R2 BCS
-            0o020102, 0o103401, 0, 0o005300,
-
-            # CMP R2,R1 BHI
-            0o020201, 0o101001, 0, 0o005300,
-
-            0)
-
+        insts = self._cc_unscc(0o103400, 0o101000)
         instloc = 0o4000
         self.loadphysmem(p, insts, instloc)
 
@@ -466,13 +454,15 @@ class TestMethods(unittest.TestCase):
     def test_ash1(self):
         # this code sequence taken from Unix startup, it's not really
         # much of a test.
-        insts = (0o012702, 0o0122451,      # mov #122451,R2
-                 0o072227, 0o0177772,      # ash -6,R2
-                 0o042702, 0o0176000,      # bic #0176000,R2
-                 0)                        # R2 should be 1224
+        with ASM() as a:
+            a.mov(0o0122451, 'r2')           # mov #122451,R2
+            a.literal(0o072200, 0o0177772)   # ash -6,R2
+            a.bic(0o0176000, 'r2')           # bic #0176000,R2
+            a.halt()
+
         p = self.make_pdp()
         instloc = 0o4000
-        self.loadphysmem(p, insts, instloc)
+        self.loadphysmem(p, a.instructions(), instloc)
         p.run(pc=instloc)
         self.assertEqual(p.r[2], 0o1224)
 

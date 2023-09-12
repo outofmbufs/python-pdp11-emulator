@@ -43,10 +43,13 @@ class PDP11InstructionAssembler:
         B6MODES[f"@-({_rn})"] = 0o50 | _i   # autodecr deferred
     del _i, _rn, _rnames
 
-    # see _InstBlock for explanation of 'with' syntax use
+    # see InstructionBlock for explanation of 'with' syntax use
     @classmethod
-    def instruction_block(cls):
-        return _InstBlock()
+    def __enter__(cls):
+        return InstructionBlock()
+
+    def __exit__(self, *args, **kwargs):
+        return None
 
     def immediate_value(self, s):
         base = 8
@@ -167,11 +170,19 @@ class PDP11InstructionAssembler:
             dst6, *dst_i = self.operand_parser(dst)
         return self._seqwords([operation | dst6, *dst_i])
 
+    # XXX the instructions are not complete, this is being developed
+    #     as needed for pdptests.py
+    #
+    # ALSO: see InstructionBlock for (primitive) branching support
+    #
     def mov(self, src, dst):
         return self._2op(0o010000, src, dst)
 
     def cmp(self, src, dst):
         return self._2op(0o020000, src, dst)
+
+    def bic(self, src, dst):
+        return self._2op(0o040000, src, dst)
 
     def add(self, src, dst):
         return self._2op(0o060000, src, dst)
@@ -211,35 +222,35 @@ class PDP11InstructionAssembler:
         return self._1op(inst, oprnd)
 
 
-# This provides a convenience for just calling the native methods
-# while accumulating a list of instructions. For better or for worse,
-# instead of:
-#   insts = (a.mov('r1', 'r2'), a.clr('r0'), ... etc)
+# An InstructionBlock is a thin layer on just accumulating a sequence
+# of results from calling the instruction methods.
 #
-# a context manager can be used to write it this way:
+# Instead of:
+#   insts = (
+#       a.mov('r1', 'r2'),
+#       a.clr('r0'),
+#          etc ...
+#       )
 #
-#   with ASM.instruction_block() as a:
+# The context manager can be used to write it this way:
+#
+#   with ASM() as a:
 #       a.mov('r1', 'r2')
 #       a.clr('r0')
-#       ...
-#       etc
+#        etc ...
 #
-# and then the instructions are obtained via a.instruction_block()
-# (not a typo; the WITH is  a class method and ^^^^^ is an instance method)
+# which, subject to opinion, may be notationally cleaner/clearer and also
+# opens the possibility of if/for/etc full programming constructs as needed.
 #
-# This is sometimes handy if conditional computation or other gyrations
-# are needed in the gathering of the instructions
+# A list of instructions in an InstructionBlock can be obtained at any
+# time via:   insts = a.instructions()
+#
 
-class _InstBlock(PDP11InstructionAssembler, AbstractContextManager):
+class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
     def __init__(self):
         super().__init__()
         self._instblock = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args, **kwargs):
-        return None
+        self.labels = {}
 
     def _seqwords(self, seq):
         """seq can be an iterable, or a naked (integer) instruction."""
@@ -249,5 +260,39 @@ class _InstBlock(PDP11InstructionAssembler, AbstractContextManager):
             self._instblock += [seq]
         return seq
 
-    def instruction_block(self):
+    def __len__(self):
+        """Returns the length of the sequence in WORDS"""
+        return len(self._instblock)
+
+    def label(self, name):
+        """Record the current position as 'name'."""
+        curoffs = len(self)
+        self.labels[name] = curoffs
+        return curoffs
+
+    # Branch instruction support only exists within a given InstructionBlock
+    def bxx_offset(self, name1, name2=None):
+        """Generate offset appropriate to Bxx between name1 and name2.
+
+        If name2 is None, generate offset, backwards, from current to name1.
+        """
+
+        # XXX TODO XXX make forward references possible and automate the
+        #              backpatching even if that gets one step closer
+        #              to slowly implementing an entire assembler...
+        if name2 is None:
+            # +255 not 256 because account for the Bxx instruction itself
+            offs = self.labels[name1] - len(self) + 255
+        else:
+            raise ValueError("two name bxx_offset not yet implemented")
+
+        offs8 = offs & 0o377
+        if offs8 != offs:
+            raise ValueError(f"distance to {name1} too far.")
+        return offs8
+
+    def bne(self, name):
+        return self.literal(0o001000 | self.bxx_offset(name))
+
+    def instructions(self):
         return self._instblock
