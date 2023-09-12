@@ -20,6 +20,32 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+# having this sort of table is useful in many places beyond instruction
+# execution (assembler, disassembler, etc)
+
+BRANCH_CODES = {
+    'bne': 0o001000,
+    'beq': 0o001400,
+    'bpl': 0o100000,
+    'bmi': 0o100400,
+    'bvc': 0o102000,
+    'bvs': 0o102400,
+    'bcc': 0o103000,
+    'bhis': 0o103000,
+    'bcs': 0o103400,
+    'blo': 0o103400,
+    'bge': 0o002000,
+    'blt': 0o002400,
+    'bgt': 0o003000,
+    'ble': 0o003400,
+    'bhi': 0o101000,
+    'blos': 0o101400
+}
+
+# there are some duplicates and they are chosen arbitrarily by this:
+BRANCH_NAMES = {v: k for k, v in BRANCH_CODES.items()}
+
+
 # keyed by masked "base code" (upper byte), not shifted
 brconds = {
     # NOTE: 000400 case is handled in op000 dispatch separately
