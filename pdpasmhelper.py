@@ -28,7 +28,7 @@
 #   are focused around helping to create hand-constructed test code.
 #
 
-import contextlib
+from contextlib import AbstractContextManager
 
 
 class PDP11InstructionAssembler:
@@ -43,12 +43,10 @@ class PDP11InstructionAssembler:
         B6MODES[f"@-({_rn})"] = 0o50 | _i   # autodecr deferred
     del _i, _rn, _rnames
 
+    # see _InstBlock for explanation of 'with' syntax use
     @classmethod
-    def newsequence(cls):
-        return _Sequence()
-
-    def append_seq(self, insts):
-        return insts
+    def instruction_block(cls):
+        return _InstBlock()
 
     def immediate_value(self, s):
         base = 8
@@ -145,23 +143,28 @@ class PDP11InstructionAssembler:
         except KeyError:
             raise valerr() from None
         seq = [mode | (b6 & 0o07), idxval]
-        try:
-            self.append_seq(seq)
-        except AttributeError:
-            pass
-        return seq
+        return self._seqwords(seq)
 
     # no-op here, but overridden in _Sequence to track generated instructions
     def _seqwords(self, seq):
         return seq
 
+    # All 2 operand instructions end up here eventually
     def _2op(self, operation, src, dst):
         src6, *src_i = self.operand_parser(src)
         dst6, *dst_i = self.operand_parser(dst)
         return self._seqwords([operation | src6 << 6 | dst6, *src_i, *dst_i])
 
+    # All 1 operand instructions end up here eventually
+    # This also supports 0 operand "literals" (which are typically
+    # instructions that have been hand-assembled another way)
     def _1op(self, operation, dst):
-        dst6, *dst_i = self.operand_parser(dst)
+        """dst can be None for, essentially, a _0op."""
+        if dst is None:
+            dst6 = 0
+            dst_i = []
+        else:
+            dst6, *dst_i = self.operand_parser(dst)
         return self._seqwords([operation | dst6, *dst_i])
 
     def mov(self, src, dst):
@@ -203,26 +206,34 @@ class PDP11InstructionAssembler:
     def trap(self, tnum):
         return self.literal(0o104400 | tnum)
 
-    # generally used for instructions not implemented by an explicit method
-    # Allows for one (or none) operand in the low 6 bits
     def literal(self, inst, oprnd=None, /):
-        if oprnd is not None:
-            return self._1op(inst, oprnd)
-        else:
-            return self._seqwords(inst)
+        """For hand-assembled instructions. Also allows 1 operand."""
+        return self._1op(inst, oprnd)
 
 
-# this is used for WITH ... it is mostly for the notational convenience
-# of being able to do thing like
-#        with ASM.sequence() as u:
-#            u.mov('r2','r6')
-#            u.trap(0)
-#        user_mode_instructions = u.sequence()
+# This provides a convenience for just calling the native methods
+# while accumulating a list of instructions. For better or for worse,
+# instead of:
+#   insts = (a.mov('r1', 'r2'), a.clr('r0'), ... etc)
+#
+# a context manager can be used to write it this way:
+#
+#   with ASM.instruction_block() as a:
+#       a.mov('r1', 'r2')
+#       a.clr('r0')
+#       ...
+#       etc
+#
+# and then the instructions are obtained via a.instruction_block()
+# (not a typo; the WITH is  a class method and ^^^^^ is an instance method)
+#
+# This is sometimes handy if conditional computation or other gyrations
+# are needed in the gathering of the instructions
 
-class _Sequence(PDP11InstructionAssembler, contextlib.AbstractContextManager):
+class _InstBlock(PDP11InstructionAssembler, AbstractContextManager):
     def __init__(self):
         super().__init__()
-        self._seq = []
+        self._instblock = []
 
     def __enter__(self):
         return self
@@ -232,12 +243,11 @@ class _Sequence(PDP11InstructionAssembler, contextlib.AbstractContextManager):
 
     def _seqwords(self, seq):
         """seq can be an iterable, or a naked (integer) instruction."""
-        if self._seq is not None:
-            try:
-                self._seq += seq
-            except TypeError:
-                self._seq += [seq]
+        try:
+            self._instblock += seq
+        except TypeError:
+            self._instblock += [seq]
         return seq
 
-    def sequence(self):
-        return self._seq
+    def instruction_block(self):
+        return self._instblock

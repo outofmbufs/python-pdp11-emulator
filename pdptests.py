@@ -126,7 +126,7 @@ class TestMethods(unittest.TestCase):
         # These instructions will be placed at 2K in memory
         #
 
-        with ASM.newsequence() as a:
+        with ASM.instruction_block() as a:
             a.mov(0o20000, 'sp')           # start system stack at 8k
 
             # write the constants as described above
@@ -180,7 +180,7 @@ class TestMethods(unittest.TestCase):
             a.halt()
 
         instloc = 0o4000             # 2K
-        self.loadphysmem(p, a.sequence(), instloc)
+        self.loadphysmem(p, a.instruction_block(), instloc)
         return p, instloc
 
     # these tests end up testing a other stuff too of course, including MMU
@@ -190,11 +190,11 @@ class TestMethods(unittest.TestCase):
 
         for result, r1tval in ((0o33333, 2), (0o22222, 0)):
             # r1=r1tval, mfpi (r1) -> r0; expect r0 = result
-            with ASM.newsequence() as a:
+            with ASM.instruction_block() as a:
                 a.mov(r1tval, 'r1')
                 a.mfpi('(r1)')
                 a.mov('(sp)+', 'r0')
-            tvecs.append((result, a.sequence()))
+            tvecs.append((result, a.instruction_block()))
 
         for result, insts in tvecs:
             with self.subTest(result=result, insts=insts):
@@ -205,13 +205,12 @@ class TestMethods(unittest.TestCase):
     def test_mfpxsp(self):
         cn = self.usefulconstants()
 
-        # these two instructions are needed as literals in the test sequence
-        with ASM.newsequence() as u:
+        with ASM.instruction_block() as u:
             u.mov('r2', 'r6')
             u.trap(0)
-        user_mode_instructions = u.sequence()
+        user_mode_instructions = u.instruction_block()
 
-        with ASM.newsequence() as premmu:
+        with ASM.instruction_block() as premmu:
             ts = premmu                    # just for brevity...
             ts.mov(0o14000, ts.ptr(0o34))  # set vector 034 to 14000
             ts.clr(ts.ptr(0o36))           # PSW for trap - zero work
@@ -223,31 +222,31 @@ class TestMethods(unittest.TestCase):
             ts.mov(0o140340, '-(sp)')      # push user-ish PSW to K stack
             ts.clr('-(sp)')                # new user PC = 0
 
-        with ASM.newsequence() as postmmu:
+        with ASM.instruction_block() as postmmu:
             postmmu.literal(6)             # RTT - goes to user mode, addr 0
 
-        p, pc = self.simplemapped_pdp(premmu=premmu.sequence(),
-                                      postmmu=postmmu.sequence())
+        p, pc = self.simplemapped_pdp(premmu=premmu.instruction_block(),
+                                      postmmu=postmmu.instruction_block())
 
         # put the trap handler at 14000 as expected
-        with ASM.newsequence() as th:
+        with ASM.instruction_block() as th:
             th.mfpd('sp')
             th.mov('(sp)+', 'r3')
             th.halt()
-        self.loadphysmem(p, th.sequence(), 0o14000)
+        self.loadphysmem(p, th.instruction_block(), 0o14000)
         p.run(pc=pc)
         self.assertEqual(p.r[2], p.r[3])
 
     def test_mtpi(self):
         cn = self.usefulconstants()
 
-        with ASM.newsequence() as ts:
+        with ASM.instruction_block() as ts:
             ts.mov(0o1717, '-(sp)')        # pushing 0o1717
             ts.mtpi(ts.ptr(0o02))          # and MTPI it to user location 2
             ts.clr(ts.ptr(cn.MMR0))        # turn MMU back off
             ts.mov(ts.ptr(0o20002), 'r0')  # r0 = (020002)
 
-        tvecs = ((0o1717, ts.sequence()),)
+        tvecs = ((0o1717, ts.instruction_block()),)
 
         for r0result, insts in tvecs:
             with self.subTest(r0result=r0result, insts=insts):
@@ -273,10 +272,10 @@ class TestMethods(unittest.TestCase):
         sub_loc = testloc + 4
 
         for addsub, loc in (('add', add_loc), ('sub', sub_loc)):
-            with ASM.newsequence() as a:
+            with ASM.instruction_block() as a:
                 getattr(a, addsub)('r0', 'r1')
                 a.halt()
-            for offs, inst in enumerate(a.sequence()):
+            for offs, inst in enumerate(a.instruction_block()):
                 p.physmem[(loc >> 1) + offs] = inst
 
         for r0, r1, added, a_nzvc, subbed, s_nzvc in testvecs:
@@ -320,7 +319,7 @@ class TestMethods(unittest.TestCase):
         # various condition code tests
         p = self.make_pdp()
 
-        with ASM.newsequence() as ts:
+        with ASM.instruction_block() as ts:
             # program is:
             #       CLR R0
             #       BEQ 1f
@@ -358,7 +357,6 @@ class TestMethods(unittest.TestCase):
             ts.mov(ts.ptr(0o5000), 'r1')
             ts.mov(ts.ptr(0o5002), 'r2')
 
-            # CMP R1,R2 BLE
             ts.cmp('r1', 'r2')
             ts.literal(0o003401)     # BLE 1f
             ts.halt()
@@ -370,7 +368,7 @@ class TestMethods(unittest.TestCase):
             ts.dec('r0')
             ts.halt()
 
-        insts = ts.sequence()
+        insts = ts.instruction_block()
         instloc = 0o4000
         self.loadphysmem(p, insts, instloc)
 
@@ -405,6 +403,7 @@ class TestMethods(unittest.TestCase):
     def test_unscc(self):
         # more stuff like test_cc but specifically testing unsigned Bxx codes
         p = self.make_pdp()
+
         insts = (
             # program is:
             #       CLR R0
