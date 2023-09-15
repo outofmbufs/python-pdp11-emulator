@@ -350,6 +350,23 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
     def instructions(self):
         return self._instblock
 
+    # this is a convenience that allows a list of words (usually instructions)
+    # to be "embedded" into an InstructionBlock with a leading jmp .+N
+    # to jump over it.
+    def jump_over_and_embed(self, words, /, *, name=None):
+        """Embed words with leading 'jumpover'; returns offset of words
+
+        If optional name given, creates a label for the words
+        """
+        if name is None:
+            # an internal label name is generated instead
+            name = f"__{id(object)}"
+
+        self.jmp(f"{len(words)*2}.(pc)")
+        words_offs = self.label(name)
+        for w in words:
+            self.literal(w)
+        return words_offs
 
 if __name__ == "__main__":
     import unittest
