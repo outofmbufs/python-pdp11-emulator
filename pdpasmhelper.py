@@ -203,7 +203,7 @@ class PDP11InstructionAssembler:
         return self._1op(0o000100, dst)
 
     def br(self, offs):
-        return self.literal(0o000400 | (offs & 0o77))
+        return self.literal(0o000400 | (offs & 0o377))
 
     def clr(self, dst):
         return self._1op(0o005000, dst)
@@ -342,6 +342,10 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
 
     def beq(self, target):
         return self.literal(BRANCH_CODES['beq'] | self.bxx_offset(target))
+
+    # overrides the base br to implement label support
+    def br(self, target):
+        return self.literal(0o000400 | self.bxx_offset(target))
 
     def instructions(self):
         return self._instblock
