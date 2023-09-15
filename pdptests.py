@@ -35,14 +35,6 @@ class TestMethods(unittest.TestCase):
 
     PDPLOGLEVEL = 'INFO'
 
-    # DISCLAIMER ABOUT TEST CODING PHILOSOPHY:
-    #   For the most part, actual PDP-11 machine code is created and
-    #   used to establish the test conditions, as this provides additional
-    #   (albeit haphazard) testing of the functionality. Occasionally it's
-    #   just too much hassle to do that and the pdp object is manipulated
-    #   directly via methods/attributes to establish conditions.
-    #   There's no rhyme or reason in picking the approach for a given test.
-
     # used to create various instances, collects all the options
     # detail into this one place... mostly this is about loglevel
     @classmethod
@@ -166,7 +158,7 @@ class TestMethods(unittest.TestCase):
             # turn on 22-bit mode, unibus mapping, and I/D sep for k & u
             a.mov(0o000065, a.ptr(cn.MMR3))
 
-            # Instructions supplied by caller, to be execute before
+            # Instructions supplied by caller, to be executed before
             # enabling the MMU. They are "literals" since they have
             # already been assembled.
             for w in premmu:
@@ -184,7 +176,7 @@ class TestMethods(unittest.TestCase):
         self.loadphysmem(p, a.instructions(), instloc)
         return p, instloc
 
-    # these tests end up testing a other stuff too of course, including MMU
+    # these tests end up testing other stuff too of course, including MMU
     def test_mfpi(self):
 
         tvecs = []
@@ -665,80 +657,180 @@ class TestMethods(unittest.TestCase):
                 trapexpected = i
             self.assertEqual(p.r[1], trapexpected)
 
-    # test_mmu_1 .. test_mmu_N .. a variety of MMU tests.
-    #
-    # Any of the other tests that use simplemapped_pdp() implicitly
-    # test some aspects of the MMU but these are more targeted tests.
-    # NOTE: it's a lot easier to test via the methods than via writing
-    #       elaborate PDP-11 machine code so that's what these do.
-
-    def test_mmu_1(self):
-        # test the page length field support
-        p = self.make_pdp()
-
-        # using ED=0 (segments grow upwards), create a (bizarre!)
-        # user DSPACE mapping where the the first segment has length 0,
-        # the second has 16, the third has 32 ... etc and then check
-        # that that valid addresses map correctly and invalid ones fault
-        # correctly. NOTE that there are subtle semantics to the so-called
-        # "page length field" ... in a page that grows upwards, a plf of
-        # zero means that to be INVALID the block number has to be greater
-        # than zero (therefore "zero" length really means 64 bytes of
-        # validity) and there is a similar off-by-one semantic to ED=1
-        # downward pages. The test understands this.
+    def test_mmu_updown(self):
+        # test the page length field support in both up and down directions
 
         cn = self.usefulconstants()
-        for segno in range(8):
-            p.mmu.wordRW(cn.UDSA0 + (segno*2), (8192 * segno) >> 6)
-            pln = segno * 16
-            p.mmu.wordRW(cn.UDSD0 + (segno*2), (pln << 8) | 0o06)
 
-        # enable user I/D separation
-        p.mmu.MMR3 |= 0o01
+        # Two tests - up and down.
+        #
+        # In both tests, KERNEL I space page 0 is mapped to physical 0
+        # and I/D separation is NOT enabled for KERNEL.
+        #
+        # USER I space is mapped to 0o20000.
+        # All 64K of USER D space is mapped to 64K of physical memory
+        # ranging from 0o200000 (not a typo) to 0o
+        # from 0o200000 (not a typo) .. 0o400000 (not a typo), but with
+        # a bizarre segment length scheme according to UP or DOWN phase of
+        # the test as below. I/D separation is (obviously) enabled for USER.
+        # All 64K of that memory is filled with sequential words such
+        # that (vaddr) + vaddr = 0o123456 (where vaddr is a user D space
+        # virtual address 0 .. 65534). This gives the test two ways to verify
+        # the MMU map is working correctly: by where the accessibility of a
+        # segment ends and by the value at the location where it ends.
+        #
+        # For UP:
+        #   using ED=0 (segments grow upwards), create a user DSPACE mapping
+        #   where segment zero has length 0, segment 1 has 16 words,
+        #   segment 2 has 32 ... etc and then check that valid addresses
+        #   map correctly and invalid ones fault correctly.
+        #
+        # For DOWN:
+        #   using ED=1 ("dirbit" = 0o10) segments grow downwards, with the
+        #   same 0, 16, 32, .. progression. So segment 0 still has 0
+        #   valid words, segment 1 ENDS with 16 valid words, segment 2
+        #   ENDS with 32 valid words, etc.
 
-        # turn on the MMU!
-        p.mmu.MMR0 = 1
+        # this programs the MMU as above, according to dirbit (0 = up)
+        # NOTE: the physical memory is filled in elsewhere
+        def mmusetup(dirbit):             # "dirbit" as in PDR direction bit
+            with ASM() as a:
+                a.mov(0o20000, 'sp')      # start system stack at 8k
+                # KERNEL I SPACE
+                #    PAR to physical 0
+                #    PDR 77406 = read/write, full length
+                a.clr(a.ptr(cn.KISA0))
+                a.mov(0o077406, a.ptr(cn.KISD0))
 
-        for segno in range(8):
-            basea = segno * 8192
-            maxvalidoffset = 63 + ((segno * 64) * 16)
-            for o in range(8192):
-                if o <= maxvalidoffset:
-                    _ = p.mmu.v2p(basea + o, p.USER, p.mmu.DSPACE,
-                                  p.mmu.CYCLE.READ)
+                # USER I SPACE
+                a.mov(0o20000 >> 6, a.ptr(cn.UISA0))
+                a.mov(0o077406, a.ptr(cn.UISD0))
+
+                # USER D SPACE ...
+                a.mov(cn.UDSD0, 'r3')   # will walk through D0 .. D7
+                # NOTE: A0 .. A7 is 040(r3)
+                a.clr('r0')             # r0: segno*2 = (0, 2, 4, .., 14)
+                a.mov(0o2000, 'r4')     # phys addr base (0o200000>>6)
+
+                a.label('PARloop')
+
+                a.mov('r4', '040(r3)')    # set U PAR; don't bump r3 yet
+                a.add(0o200, 'r4')        # 0o200 = 8192>>6
+
+                # compute segno * 8 in r2 (r0 starts as segno*2)
+                a.mov('r0', 'r2')
+                a.ash(3, 'r2')
+
+                if dirbit:
+                    # pln = 0o177 - (segno * 16)
+                    a.mov(0o177, 'r1')
+                    a.sub('r2', 'r1')
+                    a.mov('r1', 'r2')
+                    a.swab('r2')
+                    a.add(0o10, 'r2')    # the downward growing case
                 else:
-                    with self.assertRaises(PDPTraps.MMU):
-                        _ = p.mmu.v2p(basea + o, p.USER, p.mmu.DSPACE,
-                                      p.mmu.CYCLE.READ)
+                    # pln = segno * 16 ... already in r2
+                    # pln << 8
+                    a.swab('r2')
 
-    def test_mmu_2(self):
-        # same test as _1 but with ED=1 so segments grow downwards
-        # test the page length field support
-        p = self.make_pdp()
+                a.add(0o06, 'r2')
+                a.mov('r2', '(r3)+')      # set U PDR
 
-        cn = self.usefulconstants()
-        for segno in range(8):
-            p.mmu.wordRW(cn.UDSA0 + (segno*2), (8192 * segno) >> 6)
-            pln = 0o177 - (segno * 16)
-            p.mmu.wordRW(cn.UDSD0 + (segno*2), (pln << 8) | 0o16)
+                a.inc('r0')
+                a.inc('r0')
+                a.cmp('r0', 16)
+                a.blt('PARloop')
 
-        # enable user I/D separation
-        p.mmu.MMR3 |= 0o01
+            return a
 
-        # turn on the MMU!
-        p.mmu.MMR0 = 1
+        for dirbit in (0o00, 0o10):
+            p = self.make_pdp()
 
-        for segno in range(8):
-            basea = segno * 8192
-            minvalidoffset = 8192 - (64 + ((segno * 64) * 16))
-            for o in range(8192):
-                if o >= minvalidoffset:
-                    _ = p.mmu.v2p(basea + o, p.USER, p.mmu.DSPACE,
-                                  p.mmu.CYCLE.READ)
+            # trap handler for MMU faults; puts 0o666 into r5 aand halts
+            trap_h_location = 0o3000
+            with ASM() as th:
+                th.mov(0o666, 'r5')
+                th.halt()
+            self.loadphysmem(p, th.instructions(), trap_h_location)
+
+            # poke the trap handler vector (250)
+            self.loadphysmem(p, [trap_h_location, 0], 0o250)
+
+            # the trap handler for "trap 0" is just a halt (which is a zero)
+            # it resides at 0o3100
+            self.loadphysmem(p, [0], 0o3100)
+            self.loadphysmem(p, [0o3100, 0], 0o34)
+
+            # set the physical memory that will be mapped to user D
+            # space to this pattern so the test can verify the mapping
+            checksum = 0o123456         # arbitrary
+            user_phys_DSPACEbase = 0o200000
+            words = (checksum - (user_phys_DSPACEbase + o) & 0o177777
+                     for o in range(0, 65536, 2))
+            self.loadphysmem(p, words, user_phys_DSPACEbase)
+
+            # user mode program:
+            #    read the given address: mov (r0)+,r1
+            #    puts 0o42 into r5 (flag that everything worked)
+            #    trap 0 back to kernel
+            # Test can then verify correct value in r5 (indicating
+            # MMU aborted or not) and correct value in r1 (indicating
+            # mapping is correct)
+            user_phys_ISPACEaddr = 0o20000
+            with ASM() as u:
+                u.mov('(r0)+', 'r1')
+                u.mov(0o42, 'r5')
+                u.trap(0)
+            self.loadphysmem(p, u.instructions(), user_phys_ISPACEaddr)
+
+            a = mmusetup(dirbit)
+            a.bis(1, a.ptr(cn.MMR3))   # enable I/D sep just for USER
+            a.mov(1, a.ptr(cn.MMR0))   # turn on MMU
+            a.halt()
+
+            testcase_offs = a.label('TESTCASE') * 2
+
+            # this is the kernel code that will be run per-test case
+
+            a.mov(0o20000, 'sp')    # reestablish stack each time
+            a.clr('r5')             # sentinel becomes 0o42 or 0o666
+
+            # this value never occurs in user DSPACE (because every
+            # word location has been written with an even value)
+            # so this is a sentinel for whethe the read happened
+            user_noval = 1
+            a.mov(user_noval, 'r1')
+            a.mov(0o140340, '-(sp)')      # push user-ish PSW to K stack
+            a.clr('-(sp)')                # new user PC = 0
+            a.rtt()
+
+            addr = 0o4000
+            self.loadphysmem(p, a.instructions(), addr)
+
+            p.run(pc=addr)    # note HALT prior to testcase_offs
+
+            def good(dirbit, segno, o):
+                if dirbit:
+                    minvalidoffset = 8192 - (64 + ((segno * 64) * 16))
+                    return o >= minvalidoffset
                 else:
-                    with self.assertRaises(PDPTraps.MMU):
-                        _ = p.mmu.v2p(basea + o, p.USER, p.mmu.DSPACE,
-                                      p.mmu.CYCLE.READ)
+                    maxvalidoffset = 63 + ((segno * 64) * 16)
+                    return o <= maxvalidoffset
+
+            for segno in range(8):
+                p.r[0] = segno * 8192
+                for o in range(4096):
+                    p.run(pc=addr + testcase_offs)
+                    physval = (checksum -
+                               ((segno * 8192) + (o * 2))) & 0o177777
+                    if good(dirbit, segno, o*2):
+                        r5_expected = 0o42
+                        r1_expected = physval
+                    else:
+                        r5_expected = 0o666
+                        r1_expected = user_noval
+                    self.assertEqual(p.r[1], r1_expected)
+                    self.assertEqual(p.r[5], r5_expected)
 
     def test_ubmap(self):
         p = self.make_pdp()
