@@ -148,7 +148,7 @@ class PDP11InstructionAssembler:
             raise valerr() from None
         return [mode | (b6 & 0o07), idxval]
 
-    # no-op here, but overridden in _Sequence to track generated instructions
+    # gets overridden in InstructionBlock to track generated instructions
     def _seqwords(self, seq):
         return seq
 
@@ -185,13 +185,25 @@ class PDP11InstructionAssembler:
         return self._2op(0o020000, src, dst)
 
     def bic(self, src, dst):
+        return self._2op(0o030000, src, dst)
+
+    def bic(self, src, dst):
         return self._2op(0o040000, src, dst)
+
+    def bis(self, src, dst):
+        return self._2op(0o050000, src, dst)
 
     def add(self, src, dst):
         return self._2op(0o060000, src, dst)
 
     def sub(self, src, dst):
         return self._2op(0o160000, src, dst)
+
+    def jmp(self, dst):
+        return self._1op(0o000100, dst)
+
+    def br(self, offs):
+        return self.literal(0o000400 | (offs & 0o77))
 
     def clr(self, dst):
         return self._1op(0o005000, dst)
@@ -201,6 +213,18 @@ class PDP11InstructionAssembler:
 
     def dec(self, dst):
         return self._1op(0o005300, dst)
+
+    def swab(self, dst):
+        return self._1op(0o000300, dst)
+
+    def ash(self, cnt, dst):
+        try:
+            return self.literal(0o072000 | dst << 6, cnt)
+        except TypeError:
+            dstb6, *dst_i = self.operand_parser(dst)
+            if dstb6 & 0o70:
+                raise ValueError("ash dst must be register direct")
+            return self.literal(0o072000 | dstb6 << 6, cnt)
 
     def halt(self):
         return self.literal(0)
@@ -248,6 +272,8 @@ class PDP11InstructionAssembler:
 # which, subject to opinion, may be notationally cleaner/clearer and also
 # opens the possibility of if/for/etc full programming constructs as needed.
 #
+# The context manager also supports bare-bones labels, helpful for branches
+#
 # A list of instructions in an InstructionBlock can be obtained at any
 # time via:   insts = a.instructions()
 #
@@ -294,10 +320,12 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         except TypeError:
             pass
 
-        # perhaps it is a label
+        # perhaps it is a label ... by definition it has to be backwards if so
         try:
             # +255 not 256 bcs the Bxx instruction itself
             offs = self.labels[target] - len(self) + 255
+            if offs < 128:
+                raise ValueError(f"branch target ('{target}') too far.")
         except KeyError:
             raise ValueError(f"can't find branch target '{target}'")
 
@@ -309,8 +337,37 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
     def bne(self, target):
         return self.literal(BRANCH_CODES['bne'] | self.bxx_offset(target))
 
+    def blt(self, target):
+        return self.literal(BRANCH_CODES['blt'] | self.bxx_offset(target))
+
     def beq(self, target):
         return self.literal(BRANCH_CODES['beq'] | self.bxx_offset(target))
 
     def instructions(self):
         return self._instblock
+
+
+if __name__ == "__main__":
+    import unittest
+
+    ASM = PDP11InstructionAssembler
+
+    class TestMethods(unittest.TestCase):
+        def test_bne_label_distance(self):
+            # this should just execute without any issue
+            for i in range(127):
+                with ASM() as a:
+                    a.label('foo')
+                    for _ in range(i):
+                        a.mov('r0', 'r0')
+                    a.bne('foo')
+
+            # but this should ValueError ... branch too far
+            with ASM() as a:
+                a.label('foo')
+                for _ in range(128):
+                    a.mov('r0', 'r0')
+                with self.assertRaises(ValueError):
+                    a.bne('foo')
+
+    unittest.main()
