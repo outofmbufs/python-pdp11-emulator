@@ -681,15 +681,17 @@ class TestMethods(unittest.TestCase):
         #
         # For UP:
         #   using ED=0 (segments grow upwards), create a user DSPACE mapping
-        #   where segment zero has length 0, segment 1 has 16 words,
-        #   segment 2 has 32 ... etc and then check that valid addresses
-        #   map correctly and invalid ones fault correctly.
+        #   where segment zero has length ("PLF") 0, segment 1 has length 1,
+        #   etc... and then check that valid addresses map correctly and
+        #   invalid ones fault correctly. Note a subtle semantic of the PDP
+        #   page length field: to be invalid (in an upward growing segment)
+        #   the address has to be GREATER than the computed block number.
+        #   Thus a length of "zero" still has 1 valid block of words.
         #
         # For DOWN:
         #   using ED=1 ("dirbit" = 0o10) segments grow downwards, with the
-        #   same 0, 16, 32, .. progression. So segment 0 still has 0
-        #   valid words, segment 1 ENDS with 16 valid words, segment 2
-        #   ENDS with 32 valid words, etc.
+        #   same 0, 1, 2 .. progression (of valid "blocks") but they
+        #   are at the end of the segments.
 
         # this programs the MMU as above, according to dirbit (0 = up)
         # NOTE: the physical memory is filled in elsewhere
@@ -745,21 +747,23 @@ class TestMethods(unittest.TestCase):
 
         for dirbit in (0o00, 0o10):
             p = self.make_pdp()
-
-            # trap handler for MMU faults; puts 0o666 into r5 aand halts
+            # trap handler for MMU faults; puts 0o666 into r5 and halts
             trap_h_location = 0o3000
             with ASM() as th:
                 th.mov(0o666, 'r5')
+                trap0_offs = th.label('Trap0')
                 th.halt()
+                th.clr('(sp)')   # just know the loop starts at zero
+                th.rtt()
             self.loadphysmem(p, th.instructions(), trap_h_location)
 
             # poke the trap handler vector (250)
-            self.loadphysmem(p, [trap_h_location, 0], 0o250)
+            pcps = [trap_h_location, 0]
 
-            # the trap handler for "trap 0" is just a halt (which is a zero)
-            # it resides at 0o3100
-            self.loadphysmem(p, [0], 0o3100)
-            self.loadphysmem(p, [0o3100, 0], 0o34)
+            self.loadphysmem(p, pcps, 0o250)
+            # same for the "trap 0" handler but skip to trap0_offs
+            pcps[0] += (trap0_offs*2)
+            self.loadphysmem(p, pcps, 0o34)
 
             # set the physical memory that will be mapped to user D
             # space to this pattern so the test can verify the mapping
@@ -778,36 +782,35 @@ class TestMethods(unittest.TestCase):
             # mapping is correct)
             user_phys_ISPACEaddr = 0o20000
             with ASM() as u:
+                # this value never occurs in user DSPACE (because every
+                # word location has been written with an even value)
+                # so this is a sentinel for whether the read happened
+                user_noval = 1
+                u.mov(user_noval, 'r1')
+                u.clr('r5')             # sentinel becomes 0o42 or 0o666
                 u.mov('(r0)+', 'r1')
                 u.mov(0o42, 'r5')
                 u.trap(0)
+                u.halt()                # never get here, this is illegal
+
             self.loadphysmem(p, u.instructions(), user_phys_ISPACEaddr)
 
             a = mmusetup(dirbit)
             a.bis(1, a.ptr(cn.MMR3))   # enable I/D sep just for USER
             a.mov(1, a.ptr(cn.MMR0))   # turn on MMU
-            a.halt()
-
-            testcase_offs = a.label('TESTCASE') * 2
-
-            # this is the kernel code that will be run per-test case
-
-            a.mov(0o20000, 'sp')    # reestablish stack each time
-            a.clr('r5')             # sentinel becomes 0o42 or 0o666
-
-            # this value never occurs in user DSPACE (because every
-            # word location has been written with an even value)
-            # so this is a sentinel for whethe the read happened
-            user_noval = 1
-            a.mov(user_noval, 'r1')
+            a.mov(0o20000, 'sp')    # establish kernel stack
             a.mov(0o140340, '-(sp)')      # push user-ish PSW to K stack
             a.clr('-(sp)')                # new user PC = 0
+            a.clr('r0')                # user test expects r0 to start zero
+
+            a.halt()
+            rtt_offs = a.label('RTT') * 2
             a.rtt()
 
             addr = 0o4000
             self.loadphysmem(p, a.instructions(), addr)
 
-            p.run(pc=addr)    # note HALT prior to testcase_offs
+            p.run(pc=addr)    # note HALT prior to RTT
 
             def good(dirbit, segno, o):
                 if dirbit:
@@ -818,9 +821,8 @@ class TestMethods(unittest.TestCase):
                     return o <= maxvalidoffset
 
             for segno in range(8):
-                p.r[0] = segno * 8192
                 for o in range(4096):
-                    p.run(pc=addr + testcase_offs)
+                    p.run()            # picks up at rtt pc
                     physval = (checksum -
                                ((segno * 8192) + (o * 2))) & 0o177777
                     if good(dirbit, segno, o*2):
