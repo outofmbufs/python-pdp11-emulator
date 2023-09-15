@@ -20,8 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-# having this sort of table is useful in many places beyond instruction
-# execution (assembler, disassembler, etc)
+# These tables are helpful to have for assembler, disassembler, etc
 
 BRANCH_CODES = {
     'bne': 0o001000,
@@ -42,12 +41,12 @@ BRANCH_CODES = {
     'blos': 0o101400
 }
 
-# there are some duplicates and they are chosen arbitrarily by this:
+# There are some duplicates and they are chosen arbitrarily by this:
 BRANCH_NAMES = {v: k for k, v in BRANCH_CODES.items()}
 
 
 # keyed by masked "base code" (upper byte), not shifted
-brconds = {
+_brconds = {
     # NOTE: 000400 case is handled in op000 dispatch separately
     # 0o000400: lambda n, z, v, c: True,             # BR
     0o001000: lambda n, z, v, c: not z,            # BNE
@@ -76,7 +75,7 @@ brconds = {
 
 
 def branches(cpu, inst):
-    branch(cpu, inst, brconds[inst & 0o177400])
+    branch(cpu, inst, _brconds[inst & 0o177400])
 
 
 def branch(cpu, inst, condition):
