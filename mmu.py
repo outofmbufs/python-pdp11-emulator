@@ -516,10 +516,6 @@ class MemoryMgmt:
 
     def _raisetrap(self, trapflag, vaddr, xkey):
         """Raise an MMU trap. Commits regmods and updates reason in MMR0."""
-        if trapflag == self.MMR0_BITS.ABORT_PLENGTH:
-            self.cpu.logger.debug(
-                f"PLF trap @ {oct(vaddr)}, {xkey=} "
-                f"{self.MMR0=} {self.cpu.machinestate()}")
         self._MMR1commit()
         self.MMR0 |= (trapflag |
                       xkey.segno << 1 |     # bits <3:1>
