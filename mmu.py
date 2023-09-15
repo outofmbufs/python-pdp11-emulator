@@ -24,13 +24,20 @@ from functools import partial
 from pdptraps import PDPTraps
 from types import SimpleNamespace
 from collections import namedtuple
+from enum import Enum
+
+
+# used internally to represent reads vs writes
+class _CYCLE(Enum):
+    READ = 'r'
+    WRITE = 'w'
 
 
 class MemoryMgmt:
     ISPACE = 0
     DSPACE = 1
 
-    # I/O addreses for various registers relative to I/O page base
+    # I/O addresses for various registers relative to I/O page base
     # From the pdp11/70 (and others) 1981 processor handbook, Appendix A
     #
     # Each block is:
@@ -60,9 +67,6 @@ class MemoryMgmt:
 
     # memory control (parity, etc) is not implemented but needs to respond
     MCR_OFFS = 0o17746
-
-    # encodes read vs write cycles
-    CYCLE = SimpleNamespace(READ='r', WRITE='w')
 
     TransKey = namedtuple('TransKey', ('segno', 'mode', 'space', 'cycle'))
 
@@ -146,9 +150,9 @@ class MemoryMgmt:
             return aprfile[aprnum][parpdr]
         else:
             # dump any matching cache entries in both reading/writing form.
-            for w in (self.CYCLE.READ, self.CYCLE.WRITE):
-                if (aprnum, mode, space, w) in self.segcache:
-                    del self.segcache[(aprnum, mode, space, w)]
+            for rw in (_CYCLE.READ, _CYCLE.WRITE):
+                if (aprnum, mode, space, rw) in self.segcache:
+                    del self.segcache[(aprnum, mode, space, rw)]
 
             aprfile[aprnum][parpdr] = value
 
@@ -330,7 +334,7 @@ class MemoryMgmt:
         # already happened (here). So the "found it in cache" logic up top
         # of this function needn't worry about AW bit updates.
 
-        AW_update = 0o300 if cycle == self.CYCLE.WRITE else 0o200
+        AW_update = 0o300 if cycle == _CYCLE.WRITE else 0o200
         #       XXX ^^^^^ not sure if a write should be 0o300 or naked 0o100
 
         if (pdr & AW_update) != AW_update:
@@ -417,10 +421,10 @@ class MemoryMgmt:
                 self._raisetrap(self.MMR0_BITS.ABORT_NR, vaddr, xkey)
 
             # control mode 1 is an abort if writing, mgmt trap if read
-            case 1 if cycle == self.CYCLE.READ:
+            case 1 if cycle == _CYCLE.READ:
                 straps = self.cpu.STRAPBITS.MEMMGT
 
-            case 1 | 2 if cycle == self.CYCLE.WRITE:
+            case 1 | 2 if cycle == _CYCLE.WRITE:
                 self._raisetrap(self.MMR0_BITS.ABORT_RDONLY, vaddr, xkey)
 
             # control mode 4 is mgmt trap on any access (read or write)
@@ -428,7 +432,7 @@ class MemoryMgmt:
                 straps = self.cpu.STRAPBITS.MEMMGT
 
             # control mode 5 is mgmt trap if WRITING
-            case 5 if cycle == self.CYCLE.WRITE:
+            case 5 if cycle == _CYCLE.WRITE:
                 straps = self.cpu.STRAPBITS.MEMMGT
 
         return straps
@@ -440,7 +444,7 @@ class MemoryMgmt:
         If value is not None, perform a write; return None.
         """
 
-        cycle = self.CYCLE.READ if value is None else self.CYCLE.WRITE
+        cycle = _CYCLE.READ if value is None else _CYCLE.WRITE
         pa = self.v2p(vaddr, mode, space, cycle)
         if pa >= self.iopage_base:
             return self.ub.mmio.wordRW(pa & self.cpu.IOPAGE_MASK, value)
@@ -454,7 +458,7 @@ class MemoryMgmt:
         If value is not None, perform a write; return None.
         """
 
-        cycle = self.CYCLE.READ if value is None else self.CYCLE.WRITE
+        cycle = _CYCLE.READ if value is None else _CYCLE.WRITE
         pa = self.v2p(vaddr, mode, space, cycle)
 
         # Physical memory is represented as an array of 16-bit word
