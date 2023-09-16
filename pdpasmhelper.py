@@ -30,6 +30,9 @@
 
 from contextlib import AbstractContextManager
 from branches import BRANCH_CODES
+from collections import namedtuple
+
+FwdRef = namedtuple('FwdRef', ['f', 'loc', 'name', 'block'])
 
 
 class PDP11InstructionAssembler:
@@ -285,7 +288,8 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
     def __init__(self):
         super().__init__()
         self._instblock = []
-        self.labels = {}
+        self._labels = {}
+        self._label_fwdrefs = {}
 
     def _seqwords(self, seq):
         """seq can be an iterable, or a naked (integer) instruction."""
@@ -301,34 +305,69 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
 
     def label(self, name):
         """Record the current position as 'name'."""
-        curoffs = len(self)
-        self.labels[name] = curoffs
-        return curoffs
+        curloc = len(self)
+        self._labels[name] = curloc
 
-    def _label_or_offset(self, x):
+        try:
+            frefs = self._label_fwdrefs[name]
+        except KeyError:
+            pass
+        else:
+            for fref in frefs:
+                fref.f(fref)
+            del self._label_fwdrefs[name]
+
+        return curloc
+
+    def getlabel(self, name, *, callback=None):
+        """Return value (loc) of name; register a callback if fwd ref."""
+        try:
+            return self._labels[name]
+        except KeyError:
+            if callback is None:
+                # caller is not prepared to handle a forward reference
+                raise
+            # otherwise, register the callback and return None.
+            # Callers prepared for forward references MUST check for None
+            fref = FwdRef(f=callback, loc=len(self), name=name, block=self)
+            try:
+                self._label_fwdrefs[name].append(fref)
+            except KeyError:
+                self._label_fwdrefs[name] = [fref]
+            return None
+
+    @staticmethod
+    def _neg16(x):
+        """convert negative numbers in 16-bit two's complement."""
+        origx = x
+        if x < 0 and x >= -32768:
+            x += 65536
+        if x < 0 or x > 65535:
+            raise ValueError(f"offset '{origx}' out of 16-bit range")
+        return x
+
+    def _label_or_offset(self, x, *, callback=None):
         """Return offset: either 'x' itself or computed from x as label.
 
         DOES NO VALIDATION OF SIZE OF RESULT (because different instructions
         have different requirements.
         """
 
-        # convert negative numbers in 16-bit two's complement,
-        # as a convenience but also this determines int-vs-string
-        try:
-            if x < 0 and x >= -32768:
-                x += 65536
-        except TypeError:
-            pass
-        else:
-            if x < 0 or x > 65535:
-                raise ValueError(f"offset {x=} out of 16-bit range")
-            return x
+        # If it's a str, treat it as a (possibly-forward-ref) label
+        if isinstance(x, str):
+            offs = self.getlabel(x, callback=callback)
+            if offs is not None:
+                # got a value - compute the delta
+                x = offs - (len(self) + 1)
+            else:
+                return 0            # fref will be patched later
 
-        # perhaps it is a label ... by definition (for now?)
-        # it has to be backwards if so. Return its naked offset
-        # (converted to 16-bit signed) and allow the naked KeyError
-        # to occur if the label is not found.
-        return self._label_or_offset(self.labels[x] - (len(self) + 1))
+        return self._neg16(x)
+
+    def _branchpatch(self, fref):
+        fwdoffs = self.getlabel(fref.name) - (fref.loc + 1)
+        block = fref.block
+        block._instblock[fref.loc] |= block.bxx_offset(fwdoffs)
 
     # Branch instruction support only exists within a given InstructionBlock
     def bxx_offset(self, target, /):
@@ -338,13 +377,10 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         Names are looked up in the labels and offsets generated.
         """
 
-        # XXX TODO XXX make forward references possible and automate the
-        #              backpatching even if that gets one step closer
-        #              to slowly implementing an entire assembler...
-
         try:
-            offs = self._label_or_offset(target)
-        except (KeyError, ValueError):
+            offs = self._label_or_offset(target, callback=self._branchpatch)
+
+        except ValueError:
             raise ValueError(f"branch target ({target}) too far or illegal")
 
         # offsets come back from _label.. in 16-bit form, convert to 8

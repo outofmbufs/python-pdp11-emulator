@@ -328,11 +328,13 @@ class TestMethods(unittest.TestCase):
         with ASM() as a:
             a.clr('r1')             # if successful r1 will become goodval
             a.clr('r0')
-            a.beq(+1)
+            a.beq('good')
             a.halt()                # stop here if BEQ fails
+            a.label('good')
             a.literal(0o000257)     # 1f: CCC .. clear all the condition codes
-            a.bne(+1)
+            a.bne('good2')
             a.halt()                # stop here if BNE fails
+            a.label('good2')
             a.mov(goodval, 'r1')    # indicate success
             a.halt()
 
@@ -731,7 +733,7 @@ class TestMethods(unittest.TestCase):
             tr.mov('(sp)+', 'r3')      # r3 is now the trap instruction
             tr.bic(0o177400, 'r3')
             tr.cmp(1, 'r3')
-            tr.beq(2)               # skip the HALT and the MMU entry point
+            tr.beq('common')           # skip the HALT and the MMU entry point
             # this was not a "good" trap, the user code failed
             tr.halt()
 
@@ -740,27 +742,30 @@ class TestMethods(unittest.TestCase):
 
             # both Utrap and TrapMMU join in common here on out
             # see if the access was good/bad as expected
+            tr.label('common')
             tr.cmp('r2', 'r3')
-            tr.beq(1)               # jump over the HALT
+            tr.beq('bump')          # jump over the HALT
             tr.halt()               # NOPE, something wrong!
 
             # the user mode code specifically avoids '(r0)+'
             # to avoid ambiguity in machine types for when the
             # autoincrement happens in the face of MMU aborts.
             # Bump r0 for the user code here accordingly:
+            tr.label('bump')
             tr.add(2, 'r0')
 
             # see if it is time to switch to next table entry
             tr.cmp('2(r5)', 'r0')
-            tr.bne(7)               # skip over the "time to switch" stanza
+            tr.bne('rtu')           # skip over the "time to switch" stanza
 
             # it is time to switch
             tr.add(4, 'r5')
             tr.mov('(r5)', 'r2')
             tr.cmp(0o666, 'r2')
-            tr.bne(1)
+            tr.bne('rtu')
             tr.halt()            # test done; success if r2 = 0o666
 
+            tr.label('rtu')
             # next iteration of the user code loop
             tr.clr('(sp)')       # put user PC back to zero
             tr.rtt()
@@ -793,8 +798,10 @@ class TestMethods(unittest.TestCase):
             u.mov(0o123456, 'r1')
             u.sub('(r0)', 'r1')
             u.cmp('r0', 'r1')
-            u.beq(1)
+            u.beq('good')
             u.trap(0o77)            # trap 77 indicates miscompare
+
+            u.label('good')
             u.trap(1)               # indicate good status
             # the kernel puts the PC back to zero after the good trap
             # and also bumps r0. This is how the loop loops.
@@ -861,22 +868,43 @@ class TestMethods(unittest.TestCase):
             # pattern but this is just another excuse to test more things
             # jump to the user 'setup' code, but first establish a handler
             # for the trap it will execute when done.
-            k.mov(taddr + (2 * tr.labels['trap_usersetup']), '*$34')
+            k.mov(taddr + (2 * tr.getlabel('trap_usersetup')), '*$34')
             k.mov(0o340, '*$36')
 
-            # compute where the trap handler should resume
+            # oh my is this a hack, but, well, here it is. Need to
+            # compute where the trap handler should resume. Start with
+            # the current pc, pushing it onto the stack (for use on return)
+            # and then ... need to add the right number of words to jump
+            # around everything up to and including the rtt.
             # XXX NEED BETTER FORWARD LABEL SUPPORT IN asmhelper
-            k.mov('pc', '-(sp)')
-            k.add(14, '(sp)')          # hand calculated to be just after rtt
+            # Since it's not a "real" assembler, but just a "helper"
+            # this is the best that can be done right now:
+
+            k.mov('pc', '-(sp)')       # ok, the easy part
+
+            # will be called when k.label('back_from_u') runs below
+            def _patcher(fref):
+                block = fref.block
+                fwdoffs = block.getlabel(fref.name) - fref.loc
+                block._instblock[fref.loc + 1] = 2*fwdoffs
+
+            # register that callback
+            _ = k.getlabel('back_from_u', callback=_patcher)
+
+            # the instruction that _patcher will patch
+            k.add(0, '(sp)')           # that 0 will be patched
+
             k.mov(0o140340, '-(sp)')   # push user-ish PSW to K stack
-            k.mov(u.labels['setup'] * 2, '-(sp)')   # PC for setup code
+            k.mov(u.getlabel('setup') * 2, '-(sp)')   # PC for setup code
             k.rtt()
 
+            k.label('back_from_u')
             # user code dropped this magic value into r1 on success
             k.cmp(0o3333, 'r1')
-            k.beq(1)
+            k.beq('ok')
             k.halt()
 
+            k.label('ok')
             # and now set the length limits on the user D space
             k.mov(cn.UDSD0, 'r3')   # will walk through D0 .. D7
             k.clr('r0')             # r0: segno*2 = (0, 2, 4, .., 14)
@@ -932,11 +960,11 @@ class TestMethods(unittest.TestCase):
             k.mov('(r5)', 'r2')
 
             # poke the MMU trap handler vector (250)
-            k.mov(taddr + (tr.labels['TrapMMU'] * 2), '*$250')
+            k.mov(taddr + (tr.getlabel('TrapMMU') * 2), '*$250')
             k.mov(0o340, '*$252')
 
             # same for the "trap N" handler
-            k.mov(taddr + (tr.labels['UTrap'] * 2), '*$34')
+            k.mov(taddr + (tr.getlabel('UTrap') * 2), '*$34')
             k.mov(0o340, '*$36')
 
             # ok, now ready to start the user program
@@ -1101,11 +1129,11 @@ class TestMethods(unittest.TestCase):
         _test(lambda _segno, _o: _o <= (63 + ((_segno * 64) * 16)))
 
         # run the code to convert over to DOWN MMU format, and then the test
-        p.run(pc=kernel_addr + (a.labels['DOWN'] * 2))
+        p.run(pc=kernel_addr + (a.getlabel('DOWN') * 2))
         _test(lambda _segno, _o: _o >= 8192 - (64 + ((_segno * 64) * 16)))
 
         # last but not least, the BONUS test
-        p.run(pc=kernel_addr + (a.labels['BONUS'] * 2))
+        p.run(pc=kernel_addr + (a.getlabel('BONUS') * 2))
         _test(lambda _segno, _o: _o >= 8192 - (64 + ((_segno * 64) * 16)))
 
     def test_ubmap(self):
