@@ -214,6 +214,9 @@ class PDP11InstructionAssembler:
     def dec(self, dst):
         return self._1op(0o005300, dst)
 
+    def tst(self, dst):
+        return self._1op(0o005700, dst)
+
     def swab(self, dst):
         return self._1op(0o000300, dst)
 
@@ -302,6 +305,31 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         self.labels[name] = curoffs
         return curoffs
 
+    def _label_or_offset(self, x):
+        """Return offset: either 'x' itself or computed from x as label.
+
+        DOES NO VALIDATION OF SIZE OF RESULT (because different instructions
+        have different requirements.
+        """
+
+        # convert negative numbers in 16-bit two's complement,
+        # as a convenience but also this determines int-vs-string
+        try:
+            if x < 0 and x >= -32768:
+                x += 65536
+        except TypeError:
+            pass
+        else:
+            if x < 0 or x > 65535:
+                raise ValueError(f"offset {x=} out of 16-bit range")
+            return x
+
+        # perhaps it is a label ... by definition (for now?)
+        # it has to be backwards if so. Return its naked offset
+        # (converted to 16-bit signed) and allow the naked KeyError
+        # to occur if the label is not found.
+        return self._label_or_offset(self.labels[x] - (len(self) + 1))
+
     # Branch instruction support only exists within a given InstructionBlock
     def bxx_offset(self, target, /):
         """Generate offset for Bxx target
@@ -313,26 +341,18 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         # XXX TODO XXX make forward references possible and automate the
         #              backpatching even if that gets one step closer
         #              to slowly implementing an entire assembler...
+
         try:
-            if (target & 0o377) != target:
-                raise ValueError(f"branch target ({target}) too far")
-            return target
-        except TypeError:
-            pass
+            offs = self._label_or_offset(target)
+        except (KeyError, ValueError):
+            raise ValueError(f"branch target ({target}) too far or illegal")
 
-        # perhaps it is a label ... by definition it has to be backwards if so
-        try:
-            # +255 not 256 bcs the Bxx instruction itself
-            offs = self.labels[target] - len(self) + 255
-            if offs < 128:
-                raise ValueError(f"branch target ('{target}') too far.")
-        except KeyError:
-            raise ValueError(f"can't find branch target '{target}'")
+        # offsets come back from _label.. in 16-bit form, convert to 8
+        # and make sure not too big in either direction
+        if offs > 127 and offs < (65536 - 128):
+            raise ValueError(f"branch target ('{target}') too far.")
 
-        if offs >= 0 and offs < 256:
-            return offs
-
-        raise ValueError(f"branch target ('{target}') too far.")
+        return offs & 0o377
 
     def bne(self, target):
         return self.literal(BRANCH_CODES['bne'] | self.bxx_offset(target))
@@ -346,6 +366,15 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
     # overrides the base br to implement label support
     def br(self, target):
         return self.literal(0o000400 | self.bxx_offset(target))
+
+    def sob(self, reg, target):
+        offs = self._label_or_offset(target)
+
+        # offsets are always negative and are allowed from 0 to -63
+        # but they come from _label... as two's complement, so:
+        if offs < 0o177701:    # (65536-63)
+            raise ValueError(f"sob illegal target {target}")
+        return self.literal(0o077000 | (reg << 6) | ((-offs) & 0o77))
 
     def instructions(self):
         return self._instblock
@@ -368,12 +397,21 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
             self.literal(w)
         return words_offs
 
+    def simh(self, *, startaddr=0o10000):
+        """Generate lines of SIMH deposit commands."""
+
+        for offs, w in enumerate(self.instructions()):
+            yield f"D {oct(startaddr + (2 * offs))[2:]} {oct(w)[2:]}"
+
+
 if __name__ == "__main__":
     import unittest
 
     ASM = PDP11InstructionAssembler
 
+    # NOTE: these are tests of instruction ASSEMBLY not execution.
     class TestMethods(unittest.TestCase):
+
         def test_bne_label_distance(self):
             # this should just execute without any issue
             for i in range(127):
@@ -390,5 +428,16 @@ if __name__ == "__main__":
                     a.mov('r0', 'r0')
                 with self.assertRaises(ValueError):
                     a.bne('foo')
+
+        def test_sob(self):
+            for i in range(63):   # 0..62 because the sob also counts
+                with self.subTest(i=i):
+                    with ASM() as a:
+                        a.label('foosob')
+                        for _ in range(i):
+                            a.mov('r0', 'r0')
+                        inst = a.sob(0, 'foosob')
+                        self.assertEqual(len(inst), 1)
+                        self.assertEqual(inst[0] & 0o77, i+1)
 
     unittest.main()
