@@ -661,28 +661,31 @@ class TestMethods(unittest.TestCase):
                 trapexpected = i
             self.assertEqual(p.r[1], trapexpected)
 
-    def test_mmu_updown(self):
-        # test the page length field support in both up and down directions
-
-        # XXX whether it was wise to code this test as a magnum opus
-        #     of assembler prowess is well open to debate. On the plus
-        #     side, it certainly exercises a bunch of features besides
-        #     just testing the MMU page length functionality.
+    def _make_updown(self, taddr, uaddr, kaddr, uphysdata=0o200000):
+        # Makes the instruction blocks required for the mmu_updown tests.
+        # This is separated out so (as described below) it becomes possible
+        # to execute this in isolation just to generate the instructions
+        # and use them in other simulators (e.g., SIMH)
+        #
+        # Returns a tuple (t, u, k) each being an InstructionBlock
 
         cn = self.usefulconstants()
-        p = self.make_pdp()
 
         # Two tests - up and down.
         #
         # In both tests, KERNEL I space page 0 is mapped to physical 0
         # and KERNEL I space page 7 is mapped to the I/O page.
         # I/D separation is NOT enabled for KERNEL.
+        # taddr and kaddr MUST be in this first 8K of memory (if only
+        # because the mapping setup doesn't map anything else)
         #
-        # USER I space is mapped to 0o20000.
+        # USER I space is mapped to uaddr which can be any 8K boundary
+        # 0o20000 and beyond.
+        #
         # All 64K of USER D space is mapped to 64K of physical memory
-        # from 0o200000 (not a typo) to 0o400000 (not a typo), but with
-        # a bizarre page length scheme according to UP or DOWN phase of
-        # the test as below. I/D separation is (obviously) enabled for USER.
+        # from uphysdata to uphysdata + 64K, but with a bizarre page
+        # length scheme according to UP or DOWN phase of the test as
+        # below. I/D separation is (obviously) enabled for USER.
         # All 64K of that memory is filled with sequential words such
         # that (vaddr) + vaddr = 0o123456 (where vaddr is a user D space
         # virtual address 0 .. 65534). This gives the test two ways to verify
@@ -709,11 +712,7 @@ class TestMethods(unittest.TestCase):
         #   same 0, 16, 32 .. progression (of valid "blocks") but they
         #   are at the end of the segments.
 
-        # these instructions do initialization common to both up/down cases
-        kernel_addr = 0o6000      # arbitrary start for all this
-        traps_addr = 0o4000       # make sure enough room before kernel_addr
-
-        # this code will go at traps_addr
+        # this code will go at taddr
         with ASM() as tr:
             # The trap handler for MMU faults and the trap 0 / trap 1 from
             # the user code (when there is no MMU fault). It is integrated
@@ -732,22 +731,26 @@ class TestMethods(unittest.TestCase):
             tr.mov('(sp)+', 'r3')      # r3 is now the trap instruction
             tr.bic(0o177400, 'r3')
             tr.cmp(1, 'r3')
-            tr.beq(1)
+            tr.beq(2)               # skip the HALT and the MMU entry point
             # this was not a "good" trap, the user code failed
             tr.halt()
-
-            tr.br(1)                # skip over the MMU entry point
 
             tr.label('TrapMMU')
             tr.clr('r3')            # indicate MMU fault case
 
+            # both Utrap and TrapMMU join in common here on out
             # see if the access was good/bad as expected
             tr.cmp('r2', 'r3')
             tr.beq(1)               # jump over the HALT
             tr.halt()               # NOPE, something wrong!
 
+            # the user mode code specifically avoids '(r0)+'
+            # to avoid ambiguity in machine types for when the
+            # autoincrement happens in the face of MMU aborts.
+            # Bump r0 for the user code here accordingly:
+            tr.add(2, 'r0')
+
             # see if it is time to switch to next table entry
-            tr.add(2, 'r0')      # didn't rely on (r0)+ vs MMU semantic
             tr.cmp('2(r5)', 'r0')
             tr.bne(7)               # skip over the "time to switch" stanza
 
@@ -762,172 +765,15 @@ class TestMethods(unittest.TestCase):
             tr.clr('(sp)')       # put user PC back to zero
             tr.rtt()
 
-        # this code goes at kernel_addr
-        with ASM() as a:
-            a.mov(0o20000, 'sp')      # start system stack at 8k
-            # KERNEL I SPACE
-            #    PAR 0 to physical 0
-            #    PAR 7 to physical 760000 and 22bit not turned on
-            #
-            #    PDR 77406 = read/write, full length
-            a.clr(a.ptr(cn.KISA0))
-            a.mov(0o760000 >> 6, a.ptr(cn.KISA7))
-            a.mov(0o077406, a.ptr(cn.KISD0))
-            a.mov(0o077406, a.ptr(cn.KISD7))
+            # this trap handler is only used during the startup phase
+            # See where the kernel code invokes the user setup code
+            tr.label('trap_usersetup')
+            # the kernel put a resume address onto the stack, just go there
+            tr.add(4, 'sp')       # get rid of user trap frame, don't care
+            tr.mov('(sp)+', 'pc')
 
-            # USER I SPACE
-            a.mov(0o20000 >> 6, a.ptr(cn.UISA0))
-            a.mov(0o077406, a.ptr(cn.UISD0))
-
-            # USER D SPACE going UP...
-            a.mov(cn.UDSD0, 'r3')   # will walk through D0 .. D7
-            # NOTE: A0 .. A7 is 040(r3)
-            a.clr('r0')             # r0: segno*2 = (0, 2, 4, .., 14)
-            a.mov(0o2000, 'r4')     # phys addr base (0o200000>>6)
-
-            a.label('PARloop')
-
-            a.mov('r4', '040(r3)')    # set U PAR; don't bump r3 yet
-            a.add(0o200, 'r4')        # 0o200 = 8192>>6
-
-            a.mov('r0', 'r2')         # r2 = segno*2
-            a.ash(3, 'r2')            # r2 = segno*16
-            a.swab('r2')              # really (segno*16)<<8
-            a.add(0o06, 'r2')         # ACF r/w segment
-            a.mov('r2', '(r3)+')      # set U PDR
-            a.inc('r0')               # bump r0 by two
-            a.inc('r0')
-            a.cmp('r0', 16)           # and loop until done all 8 segments
-            a.blt('PARloop')
-
-            a.bis(1, a.ptr(cn.MMR3))   # enable I/D sep just for USER
-            a.mov(1, a.ptr(cn.MMR0))   # turn on MMU
-
-            # create the test table, just push it onto the stack (yeehah!)
-            a.mov(0, '-(sp)')           # this is a PAD (not really needed)
-            a.mov(0o666, '-(sp)')       # this is a sentinel
-            a.mov(0o176100, '-(sp)')
-            a.mov(1, '-(sp)')
-            a.mov(0o160000, '-(sp)')
-            a.mov(0, '-(sp)')
-            a.mov(0o154100, '-(sp)')
-            a.mov(1, '-(sp)')
-            a.mov(0o140000, '-(sp)')
-            a.mov(0, '-(sp)')
-            a.mov(0o132100, '-(sp)')
-            a.mov(1, '-(sp)')
-            a.mov(0o120000, '-(sp)')
-            a.mov(0, '-(sp)')
-            a.mov(0o110100, '-(sp)')
-            a.mov(1, '-(sp)')
-            a.mov(0o100000, '-(sp)')
-            a.mov(0, '-(sp)')
-            a.mov(0o66100, '-(sp)')
-            a.mov(1, '-(sp)')
-            a.mov(0o60000, '-(sp)')
-            a.mov(0, '-(sp)')
-            a.mov(0o44100, '-(sp)')
-            a.mov(1, '-(sp)')
-            a.mov(0o40000, '-(sp)')
-            a.mov(0, '-(sp)')
-            a.mov(0o22100, '-(sp)')
-            a.mov(1, '-(sp)')
-            a.mov(0o20000, '-(sp)')
-            a.mov(0, '-(sp)')
-            a.mov(0o100, '-(sp)')
-            a.mov(1, '-(sp)')
-
-            # the test table for the trap handler is now here:
-            a.mov('sp', 'r5')
-            # test starts in the region at the start of the table
-            a.mov('(r5)', 'r2')
-
-            # ok, now ready to start the user program
-            a.mov(0o140340, '-(sp)')   # push user-ish PSW to K stack
-            a.clr('-(sp)')             # new user PC = 0
-            a.clr('r0')                # user test expects r0 to start zero
-            a.rtt()
-
-            # these instructions will be used to switch over
-            # to the DOWN phase of the test. Similar to the UP but
-            # don't have to do the PARs (they stay the same) and the
-            # pln calculations are different.
-
-            a.label('DOWN')
-            a.mov(cn.UDSD0, 'r3')
-            a.clr('r0')
-            a.label('PARloopDOWN')
-            # compute segno * 8 in r2 (r0 starts as segno*2)
-            a.mov('r0', 'r2')
-            a.ash(3, 'r2')
-            # pln = 0o177 - (segno * 16)
-            a.mov(0o177, 'r1')
-            a.sub('r2', 'r1')
-            a.mov('r1', 'r2')
-            a.swab('r2')
-            a.add(0o16, 'r2')    # the downward growing case
-            a.mov('r2', '(r3)+')      # set U PDR
-            a.inc('r0')
-            a.inc('r0')
-            a.cmp('r0', 16)
-            a.blt('PARloopDOWN')
-
-            # this halt will be right before the first run of user mode test
-            a.halt()
-
-            a.clr('r0')        # initial loop condition
-            a.clr('(sp)')      # just knows the user loop starts at zero
-            a.rtt()
-
-            # Now for something extra frosty... relocate just segment 4
-            # (arbitrarily chosen) of the user memory to a different
-            # physical page and run the test again to ensure it still works.
-            # This will make use of KERNEL A1 and A2 segments to map the
-            # relocation (note: I space because no sep I/D for kernel here)
-            a.label('BONUS')
-
-            # copy UDSA4 into KISA1 - mapping old segment into kernel space
-            a.mov(a.ptr(cn.UDSA0 + 4*2), a.ptr(cn.KISA0 + 2))  # i.e., A1
-
-            # the new location for this data will be physical 0o600000
-            # (not a typo) which becomes 0o6000 in the PAR
-            a.mov(0o6000, a.ptr(cn.KISA0 + 4))                 # i.e., A2
-
-            # the standard PDR access/full-length/etc bits
-            a.mov(0o077406, a.ptr(cn.KISD0 + 2))
-            a.mov(0o077406, a.ptr(cn.KISD0 + 4))
-
-            # count r0, source address r1, destination r2
-            a.mov(4096, 'r0')
-            a.mov(8192, 'r1')
-            a.mov(8192*2, 'r2')
-            a.mov('(r1)+', '(r2)+')
-            a.literal(0o077002)            # SOB to the copy
-
-            # switch the user page to the new mapping
-            a.mov(0o6000, a.ptr(cn.UDSA0 + 4*2))
-
-            # and the standard initialization/resume dance
-            a.halt()
-            a.clr('r0')
-            a.clr('(sp)')      # just knows the user loop starts at zero
-            a.rtt()
-
-        # poke the trap handler vector (250)
-        pcps = [traps_addr + (tr.labels['TrapMMU'] * 2), 0o340]
-        self.loadphysmem(p, pcps, 0o250)
-
-        # same for the "trap N" handler
-        pcps = [traps_addr + (tr.labels['UTrap'] * 2), 0o340]
-        self.loadphysmem(p, pcps, 0o34)
-
-        # all those trap instructions
-        self.loadphysmem(p, tr.instructions(), traps_addr)
-
-        # all those kernel instructions
-        self.loadphysmem(p, a.instructions(), kernel_addr)
-
-        # user mode program:
+        # user mode program: there are two parts to this
+        # Starting at (user) location ZERO: the test program:
         #    read the given address: mov (r0),r1
         #    If this causes an MMU fault, it goes to the MMU trap handler
         #    If it succeeds, it then hits the trap(1) and goes to that
@@ -937,29 +783,288 @@ class TestMethods(unittest.TestCase):
         #    the PC to zero and bumps r0 then returns to user mode for the
         #    next iteration. (Yes, all this could have been done with mfpd
         #    but that feels like a different test than this)
+        #
+        # Start at (user) location labelled 'setup'
+        #   user-mode code executed before the test begins to put
+        #   the test pattern into memory
 
-        user_phys_ISPACEaddr = 0o20000
         with ASM() as u:
             # this subtract combines the access check with part1 of chksum
             u.mov(0o123456, 'r1')
             u.sub('(r0)', 'r1')
             u.cmp('r0', 'r1')
             u.beq(1)
-            u.trap(0o77)
+            u.trap(0o77)            # trap 77 indicates miscompare
             u.trap(1)               # indicate good status
+            # the kernel puts the PC back to zero after the good trap
+            # and also bumps r0. This is how the loop loops.
             u.halt()                # never get here, this is illegal
-        self.loadphysmem(p, u.instructions(), user_phys_ISPACEaddr)
 
-        # set the physical memory that will be mapped to user D
-        # space to this pattern so the test can verify the mapping
-        checksum = 0o123456         # arbitrary
-        user_phys_DSPACEbase = 0o200000
-        words = (checksum - (user_phys_DSPACEbase + o) & 0o177777
-                 for o in range(0, 65536, 2))
-        self.loadphysmem(p, words, user_phys_DSPACEbase)
+            # this code is executed one time at startup (see kernel code)
+            u.label('setup')
+
+            # Initialize the user D space pattern that will be checked
+            # by the user code. In python this was:
+            #
+            #   checksum = 0o123456         # arbitrary
+            #   user_phys_DSPACEbase = 0o200000
+            #   words = (checksum - (user_phys_DSPACEbase + o) & 0o177777
+            #            for o in range(0, 65536, 2))
+            #   self.loadphysmem(p, words, user_phys_DSPACEbase)
+            u.clr('r0')
+            u.mov(0o123456, 'r1')
+
+            u.label('pattern')
+            u.mov('r1', '(r0)+')
+            u.sub(2, 'r1')
+            u.tst('r0')
+            u.bne('pattern')
+            # the kernel code looks for this in r1 as success flag
+            u.mov(0o3333, 'r1')
+            u.trap(0)
+
+        # The kernel-mode code that drives the whole test
+        with ASM() as k:
+            k.mov(0o20000, 'sp')      # start system stack at 8k
+            # KERNEL I SPACE
+            #    PAR 0 to physical 0
+            #    PAR 7 to physical 760000 and 22bit not turned on
+            #
+            #    PDR 77406 = read/write, full length
+            k.clr(k.ptr(cn.KISA0))
+            k.mov(0o760000 >> 6, k.ptr(cn.KISA7))
+            k.mov(0o077406, k.ptr(cn.KISD0))
+            k.mov(0o077406, k.ptr(cn.KISD7))
+
+            # USER I SPACE
+            k.mov(uaddr >> 6, k.ptr(cn.UISA0))
+            k.mov(0o077406, k.ptr(cn.UISD0))
+
+            # USER D SPACE... first set it up to be simply/fully
+            # accessible at its physical home, so that the pattern
+            # can be set. Then come back and limit the page lengths later.
+
+            k.mov(cn.UDSD0, 'r3')   # will walk through D0 .. D7
+            # NOTE: A0 .. A7 is 040(r3)
+            k.mov(uphysdata >> 6, 'r4')     # phys addr base
+            k.mov(8, 'r0')
+            k.label('utmp')
+            k.mov('r4', '040(r3)')    # set U PAR; don't bump r3 yet
+            k.add(0o200, 'r4')        # 0o200 = 8192>>6
+            k.mov(0o77406, '(r3)+')   # set U PDR and bump to next
+            k.sob(0, 'utmp')
+
+            k.bis(1, k.ptr(cn.MMR3))   # enable I/D sep just for USER
+            k.mov(1, k.ptr(cn.MMR0))   # turn on MMU
+
+            # certainly could have used mtpd to set up the user mode
+            # pattern but this is just another excuse to test more things
+            # jump to the user 'setup' code, but first establish a handler
+            # for the trap it will execute when done.
+            k.mov(taddr + (2 * tr.labels['trap_usersetup']), '*$34')
+            k.mov(0o340, '*$36')
+
+            # compute where the trap handler should resume
+            # XXX NEED BETTER FORWARD LABEL SUPPORT IN asmhelper
+            k.mov('pc', '-(sp)')
+            k.add(14, '(sp)')          # hand calculated to be just after rtt
+            k.mov(0o140340, '-(sp)')   # push user-ish PSW to K stack
+            k.mov(u.labels['setup'] * 2, '-(sp)')   # PC for setup code
+            k.rtt()
+
+            # user code dropped this magic value into r1 on success
+            k.cmp(0o3333, 'r1')
+            k.beq(1)
+            k.halt()
+
+            # and now set the length limits on the user D space
+            k.mov(cn.UDSD0, 'r3')   # will walk through D0 .. D7
+            k.clr('r0')             # r0: segno*2 = (0, 2, 4, .., 14)
+
+            k.label('PDRloop')
+            k.mov('r0', 'r2')         # r2 = segno*2
+            k.ash(3, 'r2')            # r2 = segno*16
+            k.swab('r2')              # really (segno*16)<<8
+            k.add(0o06, 'r2')         # ACF r/w segment
+            k.mov('r2', '(r3)+')      # set U PDR
+            k.inc('r0')               # bump r0 by two
+            k.inc('r0')
+            k.cmp('r0', 16)           # and loop until done all 8 segments
+            k.blt('PDRloop')
+
+            # create the test table, just push it onto the stack (yeehah!)
+            k.mov(0, '-(sp)')           # this is a PAD (not really needed)
+            k.mov(0o666, '-(sp)')       # this is a sentinel
+            k.mov(0o176100, '-(sp)')
+            k.mov(1, '-(sp)')
+            k.mov(0o160000, '-(sp)')
+            k.mov(0, '-(sp)')
+            k.mov(0o154100, '-(sp)')
+            k.mov(1, '-(sp)')
+            k.mov(0o140000, '-(sp)')
+            k.mov(0, '-(sp)')
+            k.mov(0o132100, '-(sp)')
+            k.mov(1, '-(sp)')
+            k.mov(0o120000, '-(sp)')
+            k.mov(0, '-(sp)')
+            k.mov(0o110100, '-(sp)')
+            k.mov(1, '-(sp)')
+            k.mov(0o100000, '-(sp)')
+            k.mov(0, '-(sp)')
+            k.mov(0o66100, '-(sp)')
+            k.mov(1, '-(sp)')
+            k.mov(0o60000, '-(sp)')
+            k.mov(0, '-(sp)')
+            k.mov(0o44100, '-(sp)')
+            k.mov(1, '-(sp)')
+            k.mov(0o40000, '-(sp)')
+            k.mov(0, '-(sp)')
+            k.mov(0o22100, '-(sp)')
+            k.mov(1, '-(sp)')
+            k.mov(0o20000, '-(sp)')
+            k.mov(0, '-(sp)')
+            k.mov(0o100, '-(sp)')
+            k.mov(1, '-(sp)')
+
+            # the test table for the trap handler is now here:
+            k.mov('sp', 'r5')
+            # test starts in the region at the start of the table
+            k.mov('(r5)', 'r2')
+
+            # poke the MMU trap handler vector (250)
+            k.mov(taddr + (tr.labels['TrapMMU'] * 2), '*$250')
+            k.mov(0o340, '*$252')
+
+            # same for the "trap N" handler
+            k.mov(taddr + (tr.labels['UTrap'] * 2), '*$34')
+            k.mov(0o340, '*$36')
+
+            # ok, now ready to start the user program
+            k.mov(0o140340, '-(sp)')   # push user-ish PSW to K stack
+            k.clr('-(sp)')             # new user PC = 0
+            k.clr('r0')                # user test expects r0 to start zero
+            k.rtt()
+
+            # these instructions will be used to switch over
+            # to the DOWN phase of the test. Similar to the UP but
+            # don't have to do the PARs (they stay the same) and the
+            # pln calculations are different.
+
+            k.label('DOWN')
+            k.mov(cn.UDSD0, 'r3')
+            k.clr('r0')
+            k.label('PARloopDOWN')
+            # compute segno * 8 in r2 (r0 starts as segno*2)
+            k.mov('r0', 'r2')
+            k.ash(3, 'r2')
+            # pln = 0o177 - (segno * 16)
+            k.mov(0o177, 'r1')
+            k.sub('r2', 'r1')
+            k.mov('r1', 'r2')
+            k.swab('r2')
+            k.add(0o16, 'r2')    # the downward growing case
+            k.mov('r2', '(r3)+')      # set U PDR
+            k.inc('r0')
+            k.inc('r0')
+            k.cmp('r0', 16)
+            k.blt('PARloopDOWN')
+
+            # this halt will be right before the first run of user mode test
+            k.halt()
+
+            k.clr('r0')        # initial loop condition
+            k.clr('(sp)')      # just knows the user loop starts at zero
+            k.rtt()
+
+            # Now for something extra frosty... relocate just segment 4
+            # (arbitrarily chosen) of the user memory to a different
+            # physical page and run the test again to ensure it still works.
+            # This will make use of KERNEL A1 and A2 segments to map the
+            # relocation (note: I space because no sep I/D for kernel here)
+            k.label('BONUS')
+
+            # copy UDSA4 into KISA1 - mapping old segment into kernel space
+            k.mov(k.ptr(cn.UDSA0 + 4*2), k.ptr(cn.KISA0 + 2))  # i.e., A1
+
+            # the new location for this data will be physical 0o600000
+            # (not a typo) which becomes 0o6000 in the PAR
+            k.mov(0o6000, k.ptr(cn.KISA0 + 4))                 # i.e., A2
+
+            # the standard PDR access/full-length/etc bits
+            k.mov(0o077406, k.ptr(cn.KISD0 + 2))
+            k.mov(0o077406, k.ptr(cn.KISD0 + 4))
+
+            # count r0, source address r1, destination r2
+            k.mov(4096, 'r0')
+            k.mov(8192, 'r1')
+            k.mov(8192*2, 'r2')
+            k.mov('(r1)+', '(r2)+')
+            k.literal(0o077002)            # SOB to the copy
+
+            # switch the user page to the new mapping
+            k.mov(0o6000, k.ptr(cn.UDSA0 + 4*2))
+
+            # and the standard initialization/resume dance
+            k.halt()
+            k.clr('r0')
+            k.clr('(sp)')      # just knows the user loop starts at zero
+            k.rtt()
+
+        return (taddr, tr), (uaddr, u), (kaddr, k)
+
+    def test_mmu_updown(self):
+        # test the page length field support in both up and down directions
+
+        # This somewhat-irresponsible magnum opus of assembly code would
+        # have been much easier to write, understand, and maintain if it
+        # used the PDP1170/mmu/etc methods directly and was mostly
+        # written at the python level rather than elaborate machine code.
+        # For example, it could have looped over calls to mmu.v2p()
+        # instead of performing an elaborate dance of user mode code
+        # and kernel trap handlers to analyze the same thing.
+        #
+        # HOWEVER, doing it as machine code allowed the same instructions
+        # to be run through SIMH for cross-verification of the test itself
+        # and the machine behavior. Was the juice worth the squeeze?
+        # Someone else will have to decide; the deed is done.
+        #
+        # Note that the assembly of three code segments
+        # (the trap handlers, the user code, and the "kernel") are
+        # in a separate method, which is helpful for getting at the
+        # instructions in the "import to SIMH" usage scenario.
+        #
+
+        cn = self.usefulconstants()
+        p = self.make_pdp()
+
+        # On these addresses: the code isn't fully general (mostly in
+        # how the MMU is set up). The kernel stack will start at 8K
+        # (0o20000 physical) and work downwards. The traps and kernel
+        # code can be "anywhere" so long as it is in that first 8K
+        # of memory and leaves room for trap vectors at the bottom and
+        # stack at the top.
+        #
+        # The user code can be on any 64-byte (!) physical boundary.
+        # The kernel knows the virtual address for the start will be zero.
+        #
+
+        # this are all PHYSICAL addresses. The code is not fully general,
+        # there are constraints: taddr and kaddr must be in the first
+        # 8K of physical memory (if only because that's how the trivial
+        # kernel mapping is set up). The kernel stack, which also
+        # requires room for the test tables, must start at the tail end
+        # of the first 8K.
+        #
+        # The uaddr must be on an 8K boundary
+        taddr = 0o4000
+        kaddr = 0o6000        # make sure enough room for the traps code
+        uaddr = 0o20000
+
+        for addr, b in self._make_updown(taddr, uaddr, kaddr):
+            self.loadphysmem(p, b.instructions(), addr)
 
         # finally ready to run the whole shebang!
-        p.run(pc=kernel_addr)
+        p.run(pc=kaddr)
 
         # a halt was encountered, verify r2 is the end sentinel
         self.assertEqual(p.r[2], 0o666)
