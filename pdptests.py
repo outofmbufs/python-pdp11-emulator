@@ -669,7 +669,9 @@ class TestMethods(unittest.TestCase):
         # to execute this in isolation just to generate the instructions
         # and use them in other simulators (e.g., SIMH)
         #
-        # Returns a tuple (t, u, k) each being an InstructionBlock
+        # Returns three tuples:
+        #  (taddr, t), (uaddr, u), (k addr, k)
+        # where the t/u/k elements are the instruction blocks.
 
         cn = self.usefulconstants()
 
@@ -681,8 +683,8 @@ class TestMethods(unittest.TestCase):
         # taddr and kaddr MUST be in this first 8K of memory (if only
         # because the mapping setup doesn't map anything else)
         #
-        # USER I space is mapped to uaddr which can be any 8K boundary
-        # 0o20000 and beyond.
+        # USER I space is mapped to uaddr which can be any 64-byte
+        # (i.e., mappable to user 0) boundary 0o20000 and beyond.
         #
         # All 64K of USER D space is mapped to 64K of physical memory
         # from uphysdata to uphysdata + 64K, but with a bizarre page
@@ -713,6 +715,11 @@ class TestMethods(unittest.TestCase):
         #   using ED=1 ("dirbit" = 0o10) segments grow downwards, with the
         #   same 0, 16, 32 .. progression (of valid "blocks") but they
         #   are at the end of the segments.
+        #
+        # This test can be rightly criticized as unnecessarily complex;
+        # once the math has been shown correct for a few important length
+        # cases to consider, the possibility of further bugs is remote.
+        # Nevertheless, here it is.
 
         # this code will go at taddr
         with ASM() as tr:
@@ -724,7 +731,7 @@ class TestMethods(unittest.TestCase):
             # gets to use r2-r5:
             #      r2: expected good flag (initialized elsewhere)
             #      r3: determined good flag (by trap entry)
-            #      r5: TESTTABLE pointer (initialized elsewhere)
+            #      r5: test table data pointer (initialized elsewhere)
             tr.label('UTrap')
 
             # first determine if trap0 (bad) or trap1 (good)
@@ -832,7 +839,9 @@ class TestMethods(unittest.TestCase):
 
         # The kernel-mode code that drives the whole test
         with ASM() as k:
-            k.mov(0o20000, 'sp')      # start system stack at 8k
+            # location 0o17776 is used to remember the table start r5...
+            k.mov(0o17776, 'sp')      # start system stack at 8k - 2
+
             # KERNEL I SPACE
             #    PAR 0 to physical 0
             #    PAR 7 to physical 760000 and 22bit not turned on
@@ -923,6 +932,8 @@ class TestMethods(unittest.TestCase):
             # create the test table, just push it onto the stack (yeehah!)
             k.mov(0, '-(sp)')           # this is a PAD (not really needed)
             k.mov(0o666, '-(sp)')       # this is a sentinel
+            k.mov(0, '-(sp)')
+            k.mov(0, '-(sp)')
             k.mov(0o176100, '-(sp)')
             k.mov(1, '-(sp)')
             k.mov(0o160000, '-(sp)')
@@ -956,6 +967,7 @@ class TestMethods(unittest.TestCase):
 
             # the test table for the trap handler is now here:
             k.mov('sp', 'r5')
+            k.mov('sp', '*$17776')   # it is also stored here for re-use
             # test starts in the region at the start of the table
             k.mov('(r5)', 'r2')
 
@@ -973,12 +985,53 @@ class TestMethods(unittest.TestCase):
             k.clr('r0')                # user test expects r0 to start zero
             k.rtt()
 
-            # these instructions will be used to switch over
-            # to the DOWN phase of the test. Similar to the UP but
-            # don't have to do the PARs (they stay the same) and the
-            # pln calculations are different.
+            # this is where the DOWN test starts.
+            k.label('DOWNTEST')
 
-            k.label('DOWN')
+            # re-establish initial kernel stack
+            k.mov(0o17776, 'sp')
+
+            # Redo the entire test table for the down address cases
+            # these were precomputed from the algorithm for setting PDRs
+            k.mov(0, '-(sp)')
+            k.mov(0o666, '-(sp)')
+            k.mov(0, '-(sp)')
+            k.mov(1, '-(sp)')
+            k.mov(0o161700, '-(sp)')
+            k.mov(0, '-(sp)')
+            k.mov(0o160000, '-(sp)')
+            k.mov(1, '-(sp)')
+            k.mov(0o143700, '-(sp)')
+            k.mov(0, '-(sp)')
+            k.mov(0o140000, '-(sp)')
+            k.mov(1, '-(sp)')
+            k.mov(0o125700, '-(sp)')
+            k.mov(0, '-(sp)')
+            k.mov(0o120000, '-(sp)')
+            k.mov(1, '-(sp)')
+            k.mov(0o107700, '-(sp)')
+            k.mov(0, '-(sp)')
+            k.mov(0o100000, '-(sp)')
+            k.mov(1, '-(sp)')
+            k.mov(0o71700, '-(sp)')
+            k.mov(0, '-(sp)')
+            k.mov(0o60000, '-(sp)')
+            k.mov(1, '-(sp)')
+            k.mov(0o53700, '-(sp)')
+            k.mov(0, '-(sp)')
+            k.mov(0o40000, '-(sp)')
+            k.mov(1, '-(sp)')
+            k.mov(0o35700, '-(sp)')
+            k.mov(0, '-(sp)')
+            k.mov(0o20000, '-(sp)')
+            k.mov(1, '-(sp)')
+            k.mov(0o17700, '-(sp)')
+            k.mov(1, '-(sp)')
+
+            k.mov('sp', 'r5')    # r5 is where the table starts
+            k.mov('sp', '*$17776')   # it is also stored here for re-use
+
+            # fiddle the PDRs (PARs stay the same) for the down configuration
             k.mov(cn.UDSD0, 'r3')
             k.clr('r0')
             k.label('PARloopDOWN')
@@ -997,11 +1050,12 @@ class TestMethods(unittest.TestCase):
             k.cmp('r0', 16)
             k.blt('PARloopDOWN')
 
-            # this halt will be right before the first run of user mode test
-            k.halt()
+            k.clr('r2')                # the down test starts in 'bad' zone
 
-            k.clr('r0')        # initial loop condition
-            k.clr('(sp)')      # just knows the user loop starts at zero
+            # ok, now ready to start the user program
+            k.mov(0o140340, '-(sp)')   # push user-ish PSW to K stack
+            k.clr('-(sp)')             # new user PC = 0
+            k.clr('r0')                # user test expects r0 to start zero
             k.rtt()
 
             # Now for something extra frosty... relocate just segment 4
@@ -1010,6 +1064,9 @@ class TestMethods(unittest.TestCase):
             # This will make use of KERNEL A1 and A2 segments to map the
             # relocation (note: I space because no sep I/D for kernel here)
             k.label('BONUS')
+
+            # recover the r5 stack table beginning
+            k.mov('*$17776', 'r5')
 
             # copy UDSA4 into KISA1 - mapping old segment into kernel space
             k.mov(k.ptr(cn.UDSA0 + 4*2), k.ptr(cn.KISA0 + 2))  # i.e., A1
@@ -1032,8 +1089,8 @@ class TestMethods(unittest.TestCase):
             # switch the user page to the new mapping
             k.mov(0o6000, k.ptr(cn.UDSA0 + 4*2))
 
-            # and the standard initialization/resume dance
-            k.halt()
+            # and the standard initialization dance
+            k.clr('r2')                # the down test starts in 'bad' zone
             k.clr('r0')
             k.clr('(sp)')      # just knows the user loop starts at zero
             k.rtt()
@@ -1089,52 +1146,30 @@ class TestMethods(unittest.TestCase):
         uaddr = 0o20000
 
         for addr, b in self._make_updown(taddr, uaddr, kaddr):
+            if addr == kaddr:
+                # need to know DOWNTEST and BONUS
+                downtest = kaddr + (2 * b.getlabel('DOWNTEST'))
+                bonus = kaddr + (2 * b.getlabel('BONUS'))
             self.loadphysmem(p, b.instructions(), addr)
 
-        # finally ready to run the whole shebang!
-        p.run(pc=kaddr)
+        with self.subTest(phase="UP"):
+            # finally ready to run the whole shebang!
+            p.run(pc=kaddr)
 
-        # a halt was encountered, verify r2 is the end sentinel
-        self.assertEqual(p.r[2], 0o666)
-        return
+            # a halt was encountered, verify r2 is the end sentinel
+            self.assertEqual(p.r[2], 0o666)
 
-        # this will be used for both up/down testing, based on goodf
-        def _test(goodf):
-            previous_good = True
+        with self.subTest(phase="DOWN"):
+            # run the down test
+            p.r[2] = 0            # superfluous but makes sure
+            p.run(pc=downtest)
+            self.assertEqual(p.r[2], 0o666)
 
-            for segno in range(8):
-                for o in range(4096):
-                    p.run()            # picks up at rtt pc
-                    physval = (checksum -
-                               ((segno * 8192) + (o * 2))) & 0o177777
-                    if goodf(segno, o*2):
-                        r5_expected = 0o42
-                        r1_expected = physval
-                        if not previous_good:
-                            print(f"bad to good at r0={oct(p.r[0])}, "
-                                  f"addr = {oct(segno*8192 + (2*o))}")
-                            previous_good = True
-                    else:
-                        r5_expected = 0o666
-                        r1_expected = user_noval
-                        if previous_good:
-                            print(f"good to bad at r0={oct(p.r[0])}, "
-                                  f"addr = {oct(segno*8192 + (2*o))}")
-                            previous_good = False
-
-                    self.assertEqual(p.r[1], r1_expected)
-                    self.assertEqual(p.r[5], r5_expected)
-
-        # run the UP test:
-        _test(lambda _segno, _o: _o <= (63 + ((_segno * 64) * 16)))
-
-        # run the code to convert over to DOWN MMU format, and then the test
-        p.run(pc=kernel_addr + (a.getlabel('DOWN') * 2))
-        _test(lambda _segno, _o: _o >= 8192 - (64 + ((_segno * 64) * 16)))
-
-        # last but not least, the BONUS test
-        p.run(pc=kernel_addr + (a.getlabel('BONUS') * 2))
-        _test(lambda _segno, _o: _o >= 8192 - (64 + ((_segno * 64) * 16)))
+        with self.subTest(phase="BONUS"):
+            # and the bonus test
+            p.r[2] = 0            # superfluous but makes sure
+            p.run(pc=bonus)
+            self.assertEqual(p.r[2], 0o666)
 
     def test_ubmap(self):
         p = self.make_pdp()
