@@ -31,6 +31,7 @@
 from contextlib import AbstractContextManager
 from branches import BRANCH_CODES
 from collections import namedtuple
+from functools import partial
 
 FwdRef = namedtuple('FwdRef', ['f', 'loc', 'name', 'block'])
 
@@ -89,7 +90,6 @@ class PDP11InstructionAssembler:
 
         An integer, i, can be passed in directly; it is becomes f"${i}."
         """
-        # NOTE: Not all forms implemented yet. See FUNCTIONALITY DISCLAIMER.
 
         # for convenience
         def valerr():
@@ -285,11 +285,18 @@ class PDP11InstructionAssembler:
 #
 
 class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
+    FWDREF = object()             # this is a sentinel
+
     def __init__(self):
         super().__init__()
         self._instblock = []
         self._labels = {}
         self._label_fwdrefs = {}
+
+    def operand_parser(self, operand_string, /):
+        if operand_string is self.FWDREF:
+            operand_string = 0
+        return super().operand_parser(operand_string)
 
     def _seqwords(self, seq):
         """seq can be an iterable, or a naked (integer) instruction."""
@@ -303,10 +310,60 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         """Returns the length of the sequence in WORDS"""
         return len(self._instblock)
 
-    def label(self, name):
-        """Record the current position as 'name'."""
-        curloc = len(self)
-        self._labels[name] = curloc
+    def __dotandnumbers(self, w):
+        """Turn '.' into 2x current offset, turn numbers into integers"""
+        if isinstance(w, int):          # already an integer
+            return w
+        elif w in '+-':
+            return w
+        elif w == '.':
+            return len(self) * 2
+        elif w[-1] == '.':               # 12345. for example
+            return int(w[:-1])
+        else:
+            try:
+                return self.getlabel(w)
+            except KeyError:
+                pass
+            return int(w, 8)
+
+    @staticmethod
+    def _fwdword(loco, fref):
+        block = fref.block
+        fwdoffs = block.getlabel(fref.name) - (2*fref.loc)
+        block._instblock[fref.loc + loco] = fwdoffs
+
+    def label(self, name, *, value=None):
+        """Record the current position, or 'value', as 'name'.
+
+        If value is '.', the current position is multiplied by 2
+        (so that value will be suitable for adding to a base address)
+
+        A trivial amount of arithmetic processing is allowed in the value:
+            token + token
+            token - token
+        where 'token' is a symbol name, a number, or '.'
+        """
+
+        if value is None:
+            value = '.'
+
+        try:
+            value_tokens = value.split()
+        except AttributeError:
+            value_tokens = [value]
+
+        value_tokens = [self.__dotandnumbers(w) for w in value_tokens]
+        if len(value_tokens) == 3:
+            if value_tokens[1] == '+':
+                value_tokens = [value_tokens[0] + value_tokens[2]]
+            elif value_tokens[1] == '-':
+                value_tokens = [value_tokens[0] - value_tokens[2]]
+
+        if len(value_tokens) != 1:
+            raise ValueError(f"cannot parse '{value}'")
+
+        self._labels[name] = value_tokens[0]
 
         try:
             frefs = self._label_fwdrefs[name]
@@ -317,10 +374,11 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
                 fref.f(fref)
             del self._label_fwdrefs[name]
 
-        return curloc
+        return self._labels[name]
 
     def getlabel(self, name, *, callback=None):
         """Return value (loc) of name; register a callback if fwd ref."""
+
         try:
             return self._labels[name]
         except KeyError:
@@ -329,12 +387,42 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
                 raise
             # otherwise, register the callback and return None.
             # Callers prepared for forward references MUST check for None
+            if callback == "OP1":
+                callback = self._fwdword_op1
             fref = FwdRef(f=callback, loc=len(self), name=name, block=self)
             try:
                 self._label_fwdrefs[name].append(fref)
             except KeyError:
                 self._label_fwdrefs[name] = [fref]
-            return None
+            return self.FWDREF
+
+    def fwdvalue(self, name, relpos=0):
+        """Get a forward reference value in a form that can be patched
+        when the value becomes known. If the value being patched is
+        the first operand in a 1 or 2 operand instruction, use like this:
+        For example:
+            a.mov(a.fwdvalue('somelabel', 'OP1')
+
+        If it is the second operand, use OP2.
+        """
+
+        # In the common case where a complete 16-bit word in the
+        # instruction stream needs patching, specify callback='OP1'
+        # (the string "OP1") to patch the word that would be considered
+        # to be the first operand of the instruction. For example:
+        #    a.mov(a.getlabel('somelabel', callback='OP1'), 'r0')
+        # puts the forward reference value of 'somelabel' into r0.
+        try:
+            relpos = relpos.upper()
+        except AttributeError:
+            pass
+        if relpos == '.':
+            relpos = 0
+        elif relpos == 'OP1' or relpos == 'OPERAND_WORD_1':
+            relpos = 1
+        elif relpos == 'OP2' or relpos == 'OPERAND_WORD_2':
+            relpos = 2
+        return self.getlabel(name, callback=partial(self._fwdword, relpos))
 
     @staticmethod
     def _neg16(x):
@@ -356,16 +444,16 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         # If it's a str, treat it as a (possibly-forward-ref) label
         if isinstance(x, str):
             offs = self.getlabel(x, callback=callback)
-            if offs is not None:
+            if offs is not self.FWDREF:
                 # got a value - compute the delta
-                x = offs - (len(self) + 1)
+                x = offs - (2 * (len(self) + 1))
             else:
                 return 0            # fref will be patched later
 
         return self._neg16(x)
 
     def _branchpatch(self, fref):
-        fwdoffs = self.getlabel(fref.name) - (fref.loc + 1)
+        fwdoffs = self.getlabel(fref.name) - (2 * (fref.loc + 1))
         block = fref.block
         block._instblock[fref.loc] |= block.bxx_offset(fwdoffs)
 
@@ -383,11 +471,11 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         except ValueError:
             raise ValueError(f"branch target ({target}) too far or illegal")
 
-        # offsets come back from _label.. in 16-bit form, convert to 8
-        # and make sure not too big in either direction
-        if offs > 127 and offs < (65536 - 128):
+        # offsets come back from _label.. in 16-bit form, as byte offsets
+        # convert to 8 bit and word offset, and make sure not too big
+        if offs > 254 and offs < (65536 - 256):
             raise ValueError(f"branch target ('{target}') too far.")
-
+        offs >>= 1
         return offs & 0o377
 
     def bne(self, target):
@@ -415,11 +503,12 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
 
         offs = self._label_or_offset(target)
 
-        # offsets are always negative and are allowed from 0 to -63
+        # offsets are always negative and are allowed from 0 to -126
         # but they come from _label... as two's complement, so:
-        if offs < 0o177701:    # (65536-63)
+        if offs < 0o177602:    # (65536-126)
             raise ValueError(f"sob illegal target {target}")
-        return self.literal(0o077000 | (reg << 6) | ((-offs) & 0o77))
+
+        return self.literal(0o077000 | (reg << 6) | (((-offs) >> 1) & 0o77))
 
     def instructions(self):
         return self._instblock
@@ -473,6 +562,19 @@ if __name__ == "__main__":
                     a.mov('r0', 'r0')
                 with self.assertRaises(ValueError):
                     a.bne('foo')
+
+        def test_labelmath_plus(self):
+            with ASM() as a:
+                a.label('L1', value=17)
+                a.label('L2', value='L1 + 25.')
+            self.assertEqual(a.getlabel('L2'), 42)
+
+        def test_labelmath_minus(self):
+            with ASM() as a:
+                a.label('L1')
+                a.clr('r0')
+                a.label('L2', value='. - L1')
+            self.assertEqual(a.getlabel('L2'), 2)
 
         def test_sob(self):
             for i in range(63):   # 0..62 because the sob also counts
