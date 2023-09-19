@@ -334,8 +334,8 @@ class MemoryMgmt:
         # there are no further A/W bit updates to worry about (so they
         # can be cached at that point).
 
-        W_update = 0o200 if cycle == _CYCLE.WRITE else 0o000
-        A_update = 0o100 if straps else 0o000
+        W_update = 0o100 if cycle == _CYCLE.WRITE else 0o000
+        A_update = 0o200 if straps else 0o000
 
         AW_update = (W_update | A_update)
 
