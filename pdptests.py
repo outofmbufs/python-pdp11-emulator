@@ -673,6 +673,23 @@ class TestMethods(unittest.TestCase):
         #  (taddr, t), (uaddr, u), (k addr, k)
         # where the t/u/k elements are the instruction blocks.
 
+        # the kernel stack will start at 8K and work its way down.
+        # This is fixed/required in the code. The taddr and kaddr must also
+        # be in that first 8K and MUST leave space for the kernel stack.
+        # The kernel stack is arbitrarily given at least 256 bytes
+        # (in reality it doesn't come close to using that)
+        APR0_end = 0o20000
+        if APR0_end - max(taddr, kaddr) < 256:
+            raise ValueError("not enough room for kernel stack")
+
+        kernel_stack = APR0_end
+
+        # there are some variable locations needed in the code, they
+        # are allocated from the "stack", like this:
+
+        kernel_stack -= 2
+        saved_r5 = kernel_stack
+
         cn = self.usefulconstants()
 
         # Two tests - up and down.
@@ -838,9 +855,14 @@ class TestMethods(unittest.TestCase):
             u.trap(0)
 
         # The kernel-mode code that drives the whole test
+
+        # this is certainly one way to allocate data variables,
+        # given the limitations of the non-assembler ASM() methodology...
+        #
+        # The stack will start at kstackstart
+
         with ASM() as k:
-            # location 0o17776 is used to remember the table start r5...
-            k.mov(0o17776, 'sp')      # start system stack at 8k - 2
+            k.mov(kernel_stack, 'sp')
 
             # KERNEL I SPACE
             #    PAR 0 to physical 0
@@ -877,34 +899,15 @@ class TestMethods(unittest.TestCase):
             # pattern but this is just another excuse to test more things
             # jump to the user 'setup' code, but first establish a handler
             # for the trap it will execute when done.
-            k.mov(taddr + (2 * tr.getlabel('trap_usersetup')), '*$34')
+            k.mov(taddr + tr.getlabel('trap_usersetup'), '*$34')
             k.mov(0o340, '*$36')
 
-            # oh my is this a hack, but, well, here it is. Need to
-            # compute where the trap handler should resume. Start with
-            # the current pc, pushing it onto the stack (for use on return)
-            # and then ... need to add the right number of words to jump
-            # around everything up to and including the rtt.
-            # XXX NEED BETTER FORWARD LABEL SUPPORT IN asmhelper
-            # Since it's not a "real" assembler, but just a "helper"
-            # this is the best that can be done right now:
-
-            k.mov('pc', '-(sp)')       # ok, the easy part
-
-            # will be called when k.label('back_from_u') runs below
-            def _patcher(fref):
-                block = fref.block
-                fwdoffs = block.getlabel(fref.name) - fref.loc
-                block._instblock[fref.loc + 1] = 2*fwdoffs
-
-            # register that callback
-            _ = k.getlabel('back_from_u', callback=_patcher)
-
-            # the instruction that _patcher will patch
-            k.add(0, '(sp)')           # that 0 will be patched
+            k.mov('pc', '-(sp)')
+            # add the offset to (forward ref) back_from_u
+            k.add(k.fwdvalue('back_from_u', 'OPERAND_WORD_1'), '(sp)')
 
             k.mov(0o140340, '-(sp)')   # push user-ish PSW to K stack
-            k.mov(u.getlabel('setup') * 2, '-(sp)')   # PC for setup code
+            k.mov(u.getlabel('setup'), '-(sp)')   # PC for setup code
             k.rtt()
 
             k.label('back_from_u')
@@ -967,16 +970,17 @@ class TestMethods(unittest.TestCase):
 
             # the test table for the trap handler is now here:
             k.mov('sp', 'r5')
-            k.mov('sp', '*$17776')   # it is also stored here for re-use
+            k.mov('sp', k.ptr(saved_r5))   # so it can be recovered later
+
             # test starts in the region at the start of the table
             k.mov('(r5)', 'r2')
 
             # poke the MMU trap handler vector (250)
-            k.mov(taddr + (tr.getlabel('TrapMMU') * 2), '*$250')
+            k.mov(taddr + tr.getlabel('TrapMMU'), '*$250')
             k.mov(0o340, '*$252')
 
             # same for the "trap N" handler
-            k.mov(taddr + (tr.getlabel('UTrap') * 2), '*$34')
+            k.mov(taddr + tr.getlabel('UTrap'), '*$34')
             k.mov(0o340, '*$36')
 
             # ok, now ready to start the user program
@@ -989,7 +993,7 @@ class TestMethods(unittest.TestCase):
             k.label('DOWNTEST')
 
             # re-establish initial kernel stack
-            k.mov(0o17776, 'sp')
+            k.mov(kernel_stack, 'sp')
 
             # Redo the entire test table for the down address cases
             # these were precomputed from the algorithm for setting PDRs
@@ -1029,7 +1033,7 @@ class TestMethods(unittest.TestCase):
             k.mov(1, '-(sp)')
 
             k.mov('sp', 'r5')    # r5 is where the table starts
-            k.mov('sp', '*$17776')   # it is also stored here for re-use
+            k.mov('sp', k.ptr(saved_r5))  # store location for re-use
 
             # fiddle the PDRs (PARs stay the same) for the down configuration
             k.mov(cn.UDSD0, 'r3')
@@ -1066,7 +1070,7 @@ class TestMethods(unittest.TestCase):
             k.label('BONUS')
 
             # recover the r5 stack table beginning
-            k.mov('*$17776', 'r5')
+            k.mov(k.ptr(saved_r5), 'r5')
 
             # copy UDSA4 into KISA1 - mapping old segment into kernel space
             k.mov(k.ptr(cn.UDSA0 + 4*2), k.ptr(cn.KISA0 + 2))  # i.e., A1
@@ -1148,8 +1152,8 @@ class TestMethods(unittest.TestCase):
         for addr, b in self._make_updown(taddr, uaddr, kaddr):
             if addr == kaddr:
                 # need to know DOWNTEST and BONUS
-                downtest = kaddr + (2 * b.getlabel('DOWNTEST'))
-                bonus = kaddr + (2 * b.getlabel('BONUS'))
+                downtest = kaddr + b.getlabel('DOWNTEST')
+                bonus = kaddr + b.getlabel('BONUS')
             self.loadphysmem(p, b.instructions(), addr)
 
         with self.subTest(phase="UP"):
@@ -1170,6 +1174,125 @@ class TestMethods(unittest.TestCase):
             p.r[2] = 0            # superfluous but makes sure
             p.run(pc=bonus)
             self.assertEqual(p.r[2], 0o666)
+
+    def xxxtest_mmu_AWbits(self):
+        cn = self.usefulconstants()
+        p = self.make_pdp()
+
+        base_address = 0o10000
+
+        with ASM() as k:
+            # this is silly but easy, just put the trap handler here and
+            # jump over it
+            k.br('L1')
+            k.label('traphandler')
+            k.rtt()
+            k.label('L1')
+
+            k.mov(base_address, 'sp')      # system stack just below this code
+
+            #
+            # No I/D separation turned on, so everything is mapped via I SPACE
+            #  PAR 0 to physical 0
+            #  PAR 1 to physical 8K
+            #  PAR 2 to physical 16K
+            #    ... etc ... 1:1 virtual:physical mapping up to ...
+            #  PAR 7 to phys 760000 and 22bit not turned on (i.e., I/O page)
+            #
+            k.clr('r2')            # r2 will step by 0o200 for 8K PAR incrs
+            k.mov(cn.KISA0, 'r0')  # r0 will chug through the PARs
+            k.mov(7, 'r1')         # count of PARs to set
+            k.label('parloop')
+            k.mov('r2', '(r0)+')
+            k.add(0o200, 'r2')
+            k.sob('r1', 'parloop')
+
+            # set the PAR7 to I/O page
+            k.mov(0o7600, '(r0)')
+
+            # now the PDRs
+            k.mov(cn.KISD0, 'r4')
+            k.mov(0o77406, '(r4)+')   # read/write, full length for PDR0
+            k.mov(0o77404, 'r2')      # r/w, full length, trap on any r/w
+            k.mov(6, 'r1')            # setting PDR1 .. PDR6
+            k.label('pdrloop')
+            k.mov('r2', '(r4)+')
+            k.sob('r1', 'pdrloop')
+            k.mov(0o77406, '(r4)+')   # r/w, full length for PDR7 / IO page
+
+            # NOTE: at this point '-(r4)' will be PDR7 ... that is used below
+
+            # set up the trap handler
+            k.mov(base_address + k.getlabel('traphandler'), '*$250')
+            k.mov(0o340, '*$252')
+
+            k.mov(1, k.ptr(cn.MMR0))   # turn on MMU
+
+            # this test code just "knows" the code is in APR0 (8K and below)
+            # and makes three accesses:
+            #     a READ at 12K   (APR1)
+            #     a WRITE at 20K  (APR2)
+            #     a READ-then-WRITE at 28K (APR3)
+            #
+            # then it dumps the 8 kernel PDRS onto the stack in reverse
+            # (so that at the end (sp) -> PDR0
+            #
+            k.mov(0o20000, 'r0')       # 8K will will be the base for:
+            k.mov('010000(r0)', 'r1')  # read from 12K
+            k.mov(1234, '030000(r0)')  # write to 20K
+            k.inc('050000(r0)')        # read-then-write to 28K
+
+            # push (the dumb way) PDRs onto the stack for examination
+            k.mov('-(r4)', '-(sp)')
+            k.mov('-(r4)', '-(sp)')
+            k.mov('-(r4)', '-(sp)')
+            k.mov('-(r4)', '-(sp)')
+            k.mov('-(r4)', '-(sp)')
+            k.mov('-(r4)', '-(sp)')
+            k.mov('-(r4)', '-(sp)')
+            k.mov('-(r4)', '-(sp)')
+
+            # expected:
+            #   * PDR0 (not really part of the test)
+            #   * PDR1 to be only A bit
+            #   * PDR2 to be A and W
+            #   * PDR3 to be A and W
+            #   * PDR4-6 to be neither
+            #   * PDR7 (not really part of the test but will be neither)
+
+            # Any that are not expected are recorded as bits in r0
+            # So R0 should be zero at the halt if the test succeeded
+            k.clr('r0')
+            k.bit(0o100, '2(r4)')
+            k.beq(4)
+            k.bis(1, 'r0')
+
+            k.bit(0o200, '2(r4)')
+            k.bne(4)
+            k.bis(1, 'r0')
+
+            k.bit(0o100, '4(r4)')
+            k.bne(4)
+            k.bis(2, 'r0')
+
+            k.bit(0o200, '4(r4)')
+            k.bne(4)
+            k.bis(2, 'r0')
+
+            k.bit(0o100, '6(r4)')
+            k.bne(4)
+            k.bis(4, 'r0')
+
+            k.bit(0o200, '6(r4)')
+            k.bne(4)
+            k.bis(4, 'r0')
+
+            k.halt()
+
+        self.loadphysmem(p, k.instructions(), base_address)
+        p.run(pc=base_address)
+
+        self.assertEqual(p.r[0], 0)
 
     def test_ubmap(self):
         p = self.make_pdp()
