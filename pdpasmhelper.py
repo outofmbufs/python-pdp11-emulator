@@ -31,7 +31,7 @@
 from contextlib import AbstractContextManager
 from branches import BRANCH_CODES
 from collections import namedtuple
-from functools import partial
+
 
 FwdRef = namedtuple('FwdRef', ['f', 'loc', 'name', 'block'])
 
@@ -75,8 +75,8 @@ class PDP11InstructionAssembler:
     def ptr(self, i):
         return f'*${i}.'
 
-    def operand_parser(self, operand_string, /):
-        """Parse operand_string ('r1', '-(sp)', '4(r5)', $177776, etc).
+    def operand_parser(self, operand_token, /):
+        """Parse operand_token ('r1', '-(sp)', '4(r5)', $177776, etc).
 
         Returns: sequence: [6 bit code, additional words ...]
 
@@ -88,19 +88,24 @@ class PDP11InstructionAssembler:
         Literals that are pointers and should become @(pc)+ must
         start with '*$' and will be octal unless they end with a '.'
 
-        An integer, i, can be passed in directly; it is becomes f"${i}."
+        An integer, i, can be passed in directly; it is becomes f"${i}.
+
+        FwdRefs are stuck into the stream for later patching.
         """
 
         # for convenience
         def valerr():
-            return ValueError(f"cannot parse '{operand_string}'")
+            return ValueError(f"cannot parse '{operand_token}'")
+
+        if isinstance(operand_token, FwdRef):
+            return [0o27, operand_token]
 
         # normalize the operand, upper case for strings, turn ints back
         # into their corresponding string (roundabout, but easiest)
         try:
-            operand = operand_string.upper()
+            operand = operand_token.upper()
         except AttributeError:
-            operand = f"${operand_string}."
+            operand = f"${operand_token}."
 
         # bail out if spaces in middle, and remove spaces at ends
         s = operand.split()
@@ -285,18 +290,11 @@ class PDP11InstructionAssembler:
 #
 
 class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
-    FWDREF = object()             # this is a sentinel
-
     def __init__(self):
         super().__init__()
         self._instblock = []
         self._labels = {}
-        self._label_fwdrefs = {}
-
-    def operand_parser(self, operand_string, /):
-        if operand_string is self.FWDREF:
-            operand_string = 0
-        return super().operand_parser(operand_string)
+        self._fwdrefs = {}
 
     def _seqwords(self, seq):
         """seq can be an iterable, or a naked (integer) instruction."""
@@ -328,8 +326,14 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
             return int(w, 8)
 
     @staticmethod
-    def _fwdword(loco, fref):
+    def _fwdword(fref):
+
         block = fref.block
+        # see if we can recover loco this amazing hack way!
+        for loco in (0, 1, 2, -1, -2):
+            if block._instblock[fref.loc + loco] == fref:
+                break
+
         fwdoffs = block.getlabel(fref.name) - (2*fref.loc)
         block._instblock[fref.loc + loco] = fwdoffs
 
@@ -366,63 +370,36 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         self._labels[name] = value_tokens[0]
 
         try:
-            frefs = self._label_fwdrefs[name]
+            frefs = self._fwdrefs[name]
         except KeyError:
             pass
         else:
             for fref in frefs:
                 fref.f(fref)
-            del self._label_fwdrefs[name]
+            del self._fwdrefs[name]
 
         return self._labels[name]
 
     def getlabel(self, name, *, callback=None):
-        """Return value (loc) of name; register a callback if fwd ref."""
+        """Return value (loc) of name; register a callback if fwd ref.
 
+        If no callback given the default word-substitution callback is used,
+        which is generally sufficient for most operand purposes, e.g.:
+              a.mov(a.getlabel('foo'), 'r0')
+        will work just fine if 'foo' is a forward reference.
+        """
         try:
             return self._labels[name]
         except KeyError:
             if callback is None:
-                # caller is not prepared to handle a forward reference
-                raise
+                callback = self._fwdword
             # otherwise, register the callback and return None.
-            # Callers prepared for forward references MUST check for None
-            if callback == "OP1":
-                callback = self._fwdword_op1
             fref = FwdRef(f=callback, loc=len(self), name=name, block=self)
             try:
-                self._label_fwdrefs[name].append(fref)
+                self._fwdrefs[name].append(fref)
             except KeyError:
-                self._label_fwdrefs[name] = [fref]
-            return self.FWDREF
-
-    def fwdvalue(self, name, relpos=0):
-        """Get a forward reference value in a form that can be patched
-        when the value becomes known. If the value being patched is
-        the first operand in a 1 or 2 operand instruction, use like this:
-        For example:
-            a.mov(a.fwdvalue('somelabel', 'OP1')
-
-        If it is the second operand, use OP2.
-        """
-
-        # In the common case where a complete 16-bit word in the
-        # instruction stream needs patching, specify callback='OP1'
-        # (the string "OP1") to patch the word that would be considered
-        # to be the first operand of the instruction. For example:
-        #    a.mov(a.getlabel('somelabel', callback='OP1'), 'r0')
-        # puts the forward reference value of 'somelabel' into r0.
-        try:
-            relpos = relpos.upper()
-        except AttributeError:
-            pass
-        if relpos == '.':
-            relpos = 0
-        elif relpos == 'OP1' or relpos == 'OPERAND_WORD_1':
-            relpos = 1
-        elif relpos == 'OP2' or relpos == 'OPERAND_WORD_2':
-            relpos = 2
-        return self.getlabel(name, callback=partial(self._fwdword, relpos))
+                self._fwdrefs[name] = [fref]
+            return fref
 
     @staticmethod
     def _neg16(x):
@@ -434,7 +411,7 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
             raise ValueError(f"offset '{origx}' out of 16-bit range")
         return x
 
-    def _label_or_offset(self, x, *, callback=None):
+    def _branch_label_or_offset(self, x):
         """Return offset: either 'x' itself or computed from x as label.
 
         DOES NO VALIDATION OF SIZE OF RESULT (because different instructions
@@ -443,12 +420,12 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
 
         # If it's a str, treat it as a (possibly-forward-ref) label
         if isinstance(x, str):
-            offs = self.getlabel(x, callback=callback)
-            if offs is not self.FWDREF:
+            offs = self.getlabel(x, callback=self._branchpatch)
+            if isinstance(offs, FwdRef):
+                return 0
+            else:
                 # got a value - compute the delta
                 x = offs - (2 * (len(self) + 1))
-            else:
-                return 0            # fref will be patched later
 
         return self._neg16(x)
 
@@ -466,7 +443,7 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         """
 
         try:
-            offs = self._label_or_offset(target, callback=self._branchpatch)
+            offs = self._branch_label_or_offset(target)
 
         except ValueError:
             raise ValueError(f"branch target ({target}) too far or illegal")
@@ -501,7 +478,8 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
             if len(lc) == 2 and lc[0] == 'r':
                 reg = int(lc[1:])
 
-        offs = self._label_or_offset(target)
+        # note: target can't be forward reference; sob only goes backwards
+        offs = self._branch_label_or_offset(target)
 
         # offsets are always negative and are allowed from 0 to -126
         # but they come from _label... as two's complement, so:
@@ -511,6 +489,11 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         return self.literal(0o077000 | (reg << 6) | (((-offs) >> 1) & 0o77))
 
     def instructions(self):
+        # it is an error to request the instructions if there are unresolved
+        # forward references. This is where that is enforced.
+        if self._fwdrefs:
+            raise ValueError(f"unresolved references: "
+                             f"{list(self._fwdrefs)}")
         return self._instblock
 
     # this is a convenience that allows a list of words (usually instructions)
@@ -575,6 +558,14 @@ if __name__ == "__main__":
                 a.clr('r0')
                 a.label('L2', value='. - L1')
             self.assertEqual(a.getlabel('L2'), 2)
+
+        def test_unresolved(self):
+            with ASM() as a:
+                a.br('bozo')
+                a.clr('r0')
+                a.mov(a.getlabel('xyzzy'), 'r0')
+            with self.assertRaises(ValueError):
+                foo = a.instructions()
 
         def test_sob(self):
             for i in range(63):   # 0..62 because the sob also counts
