@@ -166,15 +166,10 @@ class MemoryMgmt:
 
     @MMR0.setter
     def MMR0(self, value):
-        self.cpu.logger.debug(f"MMR0 being set to {oct(value)}")
         self._mmr0 = value
         self._mmu_relo_enabled = (value & self.MMR0_BITS.RELO_ENABLE)
         self._mmu_trap_enabled = (value & self.MMR0_BITS.TRAP_ENABLE)
         self._mmr12_frozen = (value & self.MMR0_BITS.FREEZER_TRAPS)
-        # XXX
-        if self._mmr12_frozen:
-            self.cpu.logger.debug(f"MMR12 FROZEN {self.MMR1=} {self.MMR2=}")
-
         self.segcache = {}
         self.__rebaseIO()
 
@@ -329,13 +324,20 @@ class MemoryMgmt:
         elif (pdr & 0o10) == 0 and bn > plf:
             self._raisetrap(self.MMR0_BITS.ABORT_PLENGTH, vaddr, xkey)
 
-        # "Access" and "Written" bits updates. Subtle note: if this entry
-        # gets cached, then by definition the corresponding AW updates
-        # already happened (here). So the "found it in cache" logic up top
-        # of this function needn't worry about AW bit updates.
+        # "Attention" (not "Access") and "Written" bits updates.
+        # The W bit is indeed a "memory was written" bit.
+        # The A bit, however, is not "access" but rather only set when
+        # there is a memory management trap (not abort) related to the access.
+        #
+        # Entries can only be cached if they did not cause a strap.
+        # By definition, at that point (because reads/writes are separated)
+        # there are no further A/W bit updates to worry about (so they
+        # can be cached at that point).
 
-        AW_update = 0o300 if cycle == _CYCLE.WRITE else 0o200
-        #       XXX ^^^^^ not sure if a write should be 0o300 or naked 0o100
+        W_update = 0o200 if cycle == _CYCLE.WRITE else 0o000
+        A_update = 0o100 if straps else 0o000
+
+        AW_update = (W_update | A_update)
 
         if (pdr & AW_update) != AW_update:
             self._putapr(xkey, (par, pdr | AW_update))
