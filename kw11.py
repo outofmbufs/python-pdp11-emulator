@@ -31,9 +31,8 @@ class KW11:
     KW11_OFFS = 0o17546
 
     def __init__(self, ub):
-        interrupt_manager = ub.intmgr
         self._t = threading.Thread(
-            target=self._cloop, args=(0.05, interrupt_manager), daemon=True)
+            target=self._cloop, args=(0.05, ub.intmgr), daemon=True)
         self.running = False
         self.monbit = 0
         ub.mmio.register_simpleattr(self, 'LKS', self.KW11_OFFS, reset=True)
