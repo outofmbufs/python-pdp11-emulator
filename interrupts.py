@@ -21,7 +21,6 @@
 # SOFTWARE.
 
 from collections import namedtuple
-from functools import partial
 import threading
 
 from pdptraps import PDPTrap
@@ -38,6 +37,16 @@ class InterruptTrap(PDPTrap):
 # contains the details for a pending interrupt (see discussion)
 PendingInterrupt = namedtuple(
     'PendingInterrupt', ('pri', 'vector', 'callback'))
+
+
+# Interrupts are priority sorted by pri (duh), but (less obviously)
+# two interrupts with the same pri are further priority sorted by
+# vector, with lower vector being higher priority. This calculation
+# encapsulates that into a single integer value, with the knowledge
+# that no vectors can ever be anywhere near as high as 16384.
+
+def _qpri(pdi):
+    return (pdi.pri * 16384) + (16384 - pdi.vector)
 
 
 # To cause an interrupt, a device creates a PendingInterrupt containing:
@@ -95,8 +104,7 @@ class InterruptManager:
                 #  by the bus signal protocol yet, you can't assert the
                 #  same interrupt line again ... it's already asserted)
                 if irq not in self.requests:
-                    self.requests = sorted(
-                        self.requests + [irq], key=lambda q: q.pri)
+                    self.requests = sorted(self.requests + [irq], key=_qpri)
                     self.pri_pending = self.requests[-1].pri
             self.condition.notify_all()
 
@@ -133,6 +141,7 @@ class InterruptManager:
 
 if __name__ == "__main__":
     import unittest
+    from functools import partial
 
     class TestMethods(unittest.TestCase):
         def test__init__(self):
