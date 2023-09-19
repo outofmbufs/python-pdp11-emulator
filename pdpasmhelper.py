@@ -187,7 +187,7 @@ class PDP11InstructionAssembler:
     def cmp(self, src, dst):
         return self._2op(0o020000, src, dst)
 
-    def bic(self, src, dst):
+    def bit(self, src, dst):
         return self._2op(0o030000, src, dst)
 
     def bic(self, src, dst):
@@ -404,6 +404,15 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         return self.literal(0o000400 | self.bxx_offset(target))
 
     def sob(self, reg, target):
+        # the register can be a naked integer 0 .. 5 or an 'r' string
+        try:
+            lc = reg.lower()
+        except AttributeError:
+            pass
+        else:
+            if len(lc) == 2 and lc[0] == 'r':
+                reg = int(lc[1:])
+
         offs = self._label_or_offset(target)
 
         # offsets are always negative and are allowed from 0 to -63
