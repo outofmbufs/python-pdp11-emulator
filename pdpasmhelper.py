@@ -329,11 +329,10 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
     def _fwdword(fref):
 
         block = fref.block
-        # see if we can recover loco this amazing hack way!
-        for loco in (0, 1, 2, -1, -2):
+        # the location to be patched is in one of three places, look for it:
+        for loco in (0, 1, 2):
             if block._instblock[fref.loc + loco] == fref:
                 break
-
         fwdoffs = block.getlabel(fref.name) - (2*fref.loc)
         block._instblock[fref.loc + loco] = fwdoffs
 
@@ -429,6 +428,8 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
 
         return self._neg16(x)
 
+    # can't use the standard fwdword patcher because the offset
+    # needs to be divided by 2 and checked if fits within 8 bits
     def _branchpatch(self, fref):
         fwdoffs = self.getlabel(fref.name) - (2 * (fref.loc + 1))
         block = fref.block
