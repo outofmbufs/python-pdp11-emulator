@@ -331,25 +331,19 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         block = fref.block
         # the location to be patched is in one of three places, look for it:
         for loco in (0, 1, 2):
-            if block._instblock[fref.loc + loco] == fref:
+            if block._instblock[fref.loc + loco] is fref:
                 break
         fwdoffs = block.getlabel(fref.name) - (2*fref.loc)
         block._instblock[fref.loc + loco] = fwdoffs
 
-    def label(self, name, *, value=None):
+    def label(self, name, *, value='.'):
         """Record the current position, or 'value', as 'name'.
 
-        If value is '.', the current position is multiplied by 2
-        (so that value will be suitable for adding to a base address)
-
-        A trivial amount of arithmetic processing is allowed in the value:
-            token + token
-            token - token
-        where 'token' is a symbol name, a number, or '.'
+        If no value specified, it defaults to '.' which means
+        the current position index, multiplied by 2 so that it
+        is suitable to add to a base address. Otherwise the value
+        is taken as-is, or with a trivial amount of arithmetic.
         """
-
-        if value is None:
-            value = '.'
 
         try:
             value_tokens = value.split()
