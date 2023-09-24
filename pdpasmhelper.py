@@ -28,6 +28,7 @@
 #   are focused around helping to create hand-constructed test code.
 #
 
+import re
 from contextlib import AbstractContextManager
 from branches import BRANCH_CODES
 from collections import namedtuple
@@ -422,6 +423,15 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
 
         return self._neg16(x)
 
+    # branches can have forward references (of course), but the offset
+    # doesn't occupy a full 16-bit word. What this does is turn the
+    # branch location in the instruction stream into a 16-bit FwdRef
+    # but with a customized handler to validate and modify the branch
+    # offset once it becomes known, and to OR it with the branch code.
+    def _branchhandler(self, opcode, target):
+        # TBD / changes to come
+        pass
+
     # can't use the standard fwdword patcher because the offset
     # needs to be divided by 2 and checked if fits within 8 bits
     def _branchpatch(self, fref):
@@ -450,18 +460,14 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         offs >>= 1
         return offs & 0o377
 
-    def bne(self, target):
-        return self.literal(BRANCH_CODES['bne'] | self.bxx_offset(target))
-
-    def blt(self, target):
-        return self.literal(BRANCH_CODES['blt'] | self.bxx_offset(target))
-
-    def beq(self, target):
-        return self.literal(BRANCH_CODES['beq'] | self.bxx_offset(target))
-
-    # overrides the base br to implement label support
-    def br(self, target):
-        return self.literal(0o000400 | self.bxx_offset(target))
+    # dynamically construct the methods for all the Bxx branches
+    # This makes methods: beq, bne, bgt, etc
+    for _bname, _code in BRANCH_CODES.items():
+        def branchxx(self, target, code=_code):
+            return self.literal(code | self.bxx_offset(target))
+        branchxx.__name__ = _bname
+        setattr(PDP11InstructionAssembler, _bname, branchxx)
+    del _bname, _code, branchxx
 
     def sob(self, reg, target):
         # the register can be a naked integer 0 .. 5 or an 'r' string
