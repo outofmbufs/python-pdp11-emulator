@@ -23,6 +23,7 @@
 # These tables are helpful to have for assembler, disassembler, etc
 
 BRANCH_CODES = {
+    'br': 0o000400,
     'bne': 0o001000,
     'beq': 0o001400,
     'bpl': 0o100000,
