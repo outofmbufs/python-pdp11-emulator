@@ -904,7 +904,7 @@ class TestMethods(unittest.TestCase):
 
             k.mov('pc', '-(sp)')
             # add the offset to (forward ref) back_from_u
-            k.add(k.fwdvalue('back_from_u', 'OPERAND_WORD_1'), '(sp)')
+            k.add(k.getlabel('back_from_u'), '(sp)')
 
             k.mov(0o140340, '-(sp)')   # push user-ish PSW to K stack
             k.mov(u.getlabel('setup'), '-(sp)')   # PC for setup code
@@ -1175,7 +1175,7 @@ class TestMethods(unittest.TestCase):
             p.run(pc=bonus)
             self.assertEqual(p.r[2], 0o666)
 
-    def xxxtest_mmu_AWbits(self):
+    def test_mmu_AWbits(self):
         cn = self.usefulconstants()
         p = self.make_pdp()
 
@@ -1253,45 +1253,39 @@ class TestMethods(unittest.TestCase):
             k.mov('-(r4)', '-(sp)')
 
             # expected:
-            #   * PDR0 (not really part of the test)
+            #   * PDR0: W only, mgmt traps not set here
             #   * PDR1 to be only A bit
             #   * PDR2 to be A and W
             #   * PDR3 to be A and W
             #   * PDR4-6 to be neither
             #   * PDR7 (not really part of the test but will be neither)
 
-            # Any that are not expected are recorded as bits in r0
-            # So R0 should be zero at the halt if the test succeeded
+            # These expected_PDRs were obtained by running the machine
+            # code in this test under SIMH.
+            expected_PDRs = [0o077506,
+                             0o077604,
+                             0o077704,
+                             0o077704,
+                             0o077404,
+                             0o077404,
+                             0o077404,
+                             0o077406]
+
             k.clr('r0')
-            k.bit(0o100, '2(r4)')
-            k.beq(4)
-            k.bis(1, 'r0')
+            k.mov('sp', 'r1')
+            for i, xpdr in enumerate(expected_PDRs):
+                k.cmp(xpdr, '(r1)+')
+                k.beq(f"LXX{i}")
+                k.mov(i | 0o100000, 'r0')
+                k.mov('-2(r1)', 'r3')
+                k.br('_done')
+                k.label(f"LXX{i}")
 
-            k.bit(0o200, '2(r4)')
-            k.bne(4)
-            k.bis(1, 'r0')
-
-            k.bit(0o100, '4(r4)')
-            k.bne(4)
-            k.bis(2, 'r0')
-
-            k.bit(0o200, '4(r4)')
-            k.bne(4)
-            k.bis(2, 'r0')
-
-            k.bit(0o100, '6(r4)')
-            k.bne(4)
-            k.bis(4, 'r0')
-
-            k.bit(0o200, '6(r4)')
-            k.bne(4)
-            k.bis(4, 'r0')
-
+            k.label('_done')
             k.halt()
 
         self.loadphysmem(p, k.instructions(), base_address)
         p.run(pc=base_address)
-
         self.assertEqual(p.r[0], 0)
 
     def test_ubmap(self):
@@ -1310,7 +1304,11 @@ class TestMethods(unittest.TestCase):
         #     are all just dummied up right now
 
     # this is not a unit test, invoke it using timeit etc
-    def speed_test_setup(self, *, loopcount=10000, mmu=True, inst=None):
+    def speed_test_setup(self, *, loopcount=200, mmu=True, inst=None):
+        """Set up a test run of 10*loopcount inst instructions.
+
+        Returns tuple: p, pc
+        """
 
         p, pc = self.simplemapped_pdp()
 
@@ -1324,22 +1322,18 @@ class TestMethods(unittest.TestCase):
         if inst is None:
             inst = 0o010100
 
-        # now load the test timing loop... 9 MOV R1,R0 instructions
-        # and an SOB for looping (so 10 instructions per loop)
+        # now load the test timing loop... 49 "inst" instructions
+        # and an SOB for looping (so 50 overall instructions per loop)
 
-        insts = (0o012704, loopcount,        # loopcount into R4
-                 inst,
-                 inst,
-                 inst,
-                 inst,
-                 inst,
-                 inst,
-                 inst,
-                 inst,
-                 inst,
+        with ASM() as a:
+            a.mov(loopcount, 'r4')
+            a.label('LOOP')
+            for i in range(49):
+                a.literal(inst)
+            a.sob('r4', 'LOOP')
+            a.halt()
 
-                 0o077412,      # SOB R4 back to first inst
-                 0)             # HALT
+        insts = a.instructions()
 
         instloc = 0o4000
         for a2, w in enumerate(insts):
@@ -1347,8 +1341,33 @@ class TestMethods(unittest.TestCase):
         return p, instloc
 
     def speed_test_run(self, p, instloc):
+        """See speed_test_setup"""
         p.run(pc=instloc)
 
 
 if __name__ == "__main__":
-    unittest.main()
+    import argparse
+    import timeit
+
+    movr1r0 = 0o010100
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-p', '--performance', action="store_true")
+    parser.add_argument('-i', '--instruction', default=movr1r0, type=int)
+    args = parser.parse_args()
+
+    if args.performance:
+        # the goal is to execute inst 1M times. The loop executes 49 inst
+        # instructions and 1 sob (which taken together are considered as 50).
+        # Want to drive "number=" up more than loopcount, so use
+        #    loopcount=20     ... means "1000" inst instructions
+        #    number=1000      ... do that 1000 times, for 1M instructions
+
+        t = TestMethods()
+        p, pc = t.speed_test_setup(loopcount=20, inst=args.instruction)
+        t = timeit.timeit(stmt='t.speed_test_run(p, pc)',
+                          number=1000, globals=globals())
+        tnsec = round(1000 * t, 1)
+        print(f"Instruction {oct(args.instruction)} took {tnsec} nsecs")
+    else:
+        unittest.main()
