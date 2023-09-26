@@ -279,8 +279,8 @@ class FwdRef:
         else:
             raise ValueError(f"could not find FwdRef {self}")
 
-    def words(self):
-        return [0o27, self]
+    def __iter__(self):
+        return iter([0o27, self])
 
     def transform(self):
         return self.block.getlabel(self.name) - (2 * self.loc)
@@ -355,14 +355,22 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
             self._instblock += [seq]
         return seq
 
+    # Extend base operand_parser with ability to handle labels,
+    # including forward references
     def operand_parser(self, operand_token, *args, **kwargs):
-        # If operand_token duck-types as a FwdRef, use whatever
-        # stream sequence representation it supplies; otherwise parse
-        # the operand token the usual (superclass) way.
-        try:
-            return operand_token.words()
-        except AttributeError:
-            return super().operand_parser(operand_token, *args, **kwargs)
+        # it's possible to get here with operand_token already
+        # being a forward ref (e.g., if getlabel was used)
+        if isinstance(operand_token, FwdRef):
+            return operand_token
+        else:
+            try:
+                return super().operand_parser(operand_token, *args, **kwargs)
+            except ValueError as e:
+                if not self._allowable_label(operand_token):
+                    raise
+
+            # falling through to here means it is a label or forward reference
+            return self.getlabel(operand_token)
 
     def __len__(self):
         """Returns the length of the sequence in WORDS"""
@@ -378,12 +386,16 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
             return len(self) * 2
         elif w[-1] == '.':               # 12345. for example
             return int(w[:-1])
+        elif self._allowable_label(w):
+            return self.getlabel(w)
         else:
-            try:
-                return self.getlabel(w)
-            except KeyError:
-                pass
             return int(w, 8)
+
+    def _allowable_label(self, s):
+        if not hasattr(s, 'isalpha'):
+            return False
+        return ((s.upper() not in self.B6MODES) and
+                (s[0].isalpha() or s[0] == '_'))
 
     def label(self, name, *, value='.'):
         """Record the current position, or 'value', as 'name'.
@@ -392,6 +404,9 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         the current position index, multiplied by 2 so that it
         is suitable to add to a base address. Otherwise the value
         is taken as-is, or with a trivial amount of arithmetic.
+
+        Labels must start with a .isalpha() character and
+        must not match (ignoring case) any of the tokens in B6MODES
         """
 
         try:
@@ -444,24 +459,6 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         if x < 0 or x > 65535:
             raise ValueError(f"offset '{origx}' out of 16-bit range")
         return x
-
-    def _branch_label_or_offset(self, x):
-        """Return offset: either 'x' itself or computed from x as label.
-
-        DOES NO VALIDATION OF SIZE OF RESULT (because different instructions
-        have different requirements.
-        """
-
-        # If it's a str, treat it as a (possibly-forward-ref) label
-        if isinstance(x, str):
-            offs = self.getlabel(x)
-            if isinstance(offs, FwdRef):
-                return 0
-            else:
-                # got a value - compute the delta
-                x = offs - (2 * (len(self) + 1))
-
-        return self._neg16(x)
 
     def _branchcommon(self, target, *, fwdfactory=None):
         """Common logic for bne, bgt, etc including unconditional br."""
@@ -571,6 +568,19 @@ if __name__ == "__main__":
                     a.mov('r0', 'r0')
                 with self.assertRaises(ValueError):
                     a.bne('foo')
+
+        def test_labelmath_dot(self):
+            with ASM()as a:
+                a.mov('bozo', 'r0')
+                a.label('B')
+                a.label('BP2', value='. + 2')
+                a.clr('r0')
+                a.label('bozo')
+
+            self.assertEqual(a.getlabel('B'), 4)
+            self.assertEqual(a.getlabel('BP2'), 6)
+            self.assertEqual(a.getlabel('BP2'), a.getlabel('bozo'))
+            self.assertEqual(a.instructions()[1], 6)
 
         def test_labelmath_plus(self):
             with ASM() as a:
