@@ -1288,6 +1288,38 @@ class TestMethods(unittest.TestCase):
         p.run(pc=base_address)
         self.assertEqual(p.r[0], 0)
 
+    def test_stacklim(self):
+        p = self.make_pdp()
+
+        magic = 0o123456
+        # build the trap handler for testing stacklim
+        with ASM() as tr:
+            tr.mov('(sp)', 'r5')
+            tr.mov(magic, 'r0')
+            tr.mov(tr.ptr(0o177766), 'r1')
+            tr.halt()
+        tra = 0o6000
+        self.loadphysmem(p, tr.instructions(), tra)
+
+        with ASM() as a:
+            a.mov(0o400, 'sp')
+            a.mov(tra, a.ptr(0o4))
+            a.mov(0o340, a.ptr(0o6))
+            a.clr('r0')
+            a.clr('-(sp)')
+            a.label('fault')
+            a.halt()
+        aa = 0o4000
+        self.loadphysmem(p, a.instructions(), aa)
+
+        p.run(pc=aa)
+        self.assertEqual(p.r[0], magic)
+        self.assertEqual(p.r[1], p.CPUERR_BITS.YELLOW)
+        self.assertEqual(p.r[5], aa + a.getlabel('fault'))
+
+        # this stack result was hand-verified in SIMH
+        self.assertEqual(p.r[6], 0o372)
+
     def test_ubmap(self):
         p = self.make_pdp()
 
@@ -1354,6 +1386,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--performance', action="store_true")
     parser.add_argument('-i', '--instruction', default=movr1r0, type=int)
+    parser.add_argument('--clr', action="store_true")
     args = parser.parse_args()
 
     if args.performance:
@@ -1361,13 +1394,25 @@ if __name__ == "__main__":
         # instructions and 1 sob (which taken together are considered as 50).
         # Want to drive "number=" up more than loopcount, so use
         #    loopcount=20     ... means "1000" inst instructions
-        #    number=1000      ... do that 1000 times, for 1M instructions
+        #    number=1000       ... do that 1000 times, for 1M instructions
+
+        # simple way to test CLR instruction vs default MOV.
+        # The CLR instruction is not optimized the way MOV is so
+        # this shows the difference.
+        if args.clr:
+            args.instruction = 0o005000
 
         t = TestMethods()
         p, pc = t.speed_test_setup(loopcount=20, inst=args.instruction)
         ta = timeit.repeat(stmt='t.speed_test_run(p, pc)',
-                           number=1000, globals=globals(), repeat=5)
+                           number=1000, globals=globals(), repeat=10)
         tnsec = round(1000 * min(*ta), 1)
-        print(f"Instruction {oct(args.instruction)} took {tnsec} nsecs")
+        if args.instruction == movr1r0:
+            instr = 'MOV R1,R0'
+        elif (args.instruction & 0o177770) == 0o005000:
+            instr = f'CLR R{args.instruction & 7}'
+        else:
+            instr = oct(args.instruction)
+        print(f"Instruction {instr} took {tnsec} nsecs")
     else:
         unittest.main()
