@@ -28,13 +28,10 @@
 #   are focused around helping to create hand-constructed test code.
 #
 
-import re
 from contextlib import AbstractContextManager
 from branches import BRANCH_CODES
-from collections import namedtuple
-
-
-FwdRef = namedtuple('FwdRef', ['f', 'loc', 'name', 'block'])
+from collections import defaultdict
+from functools import partial
 
 
 class PDP11InstructionAssembler:
@@ -58,6 +55,13 @@ class PDP11InstructionAssembler:
         return None
 
     def immediate_value(self, s):
+
+        # called in various contexts which may or may not
+        # require a '$' on immediate constants; skip it if present
+        if s[0] == '$':
+            s = s[1:]
+
+        # default octal unless number terminates with '.'
         base = 8
         if s[-1] == '.':
             base = 10
@@ -89,17 +93,11 @@ class PDP11InstructionAssembler:
         Literals that are pointers and should become @(pc)+ must
         start with '*$' and will be octal unless they end with a '.'
 
-        An integer, i, can be passed in directly; it is becomes f"${i}.
-
-        FwdRefs are stuck into the stream for later patching.
+        An integer, i, can be passed in directly.
         """
 
         # for convenience
-        def valerr():
-            return ValueError(f"cannot parse '{operand_token}'")
-
-        if isinstance(operand_token, FwdRef):
-            return [0o27, operand_token]
+        cannotparse = ValueError(f"cannot parse '{operand_token}'")
 
         # normalize the operand, upper case for strings, turn ints back
         # into their corresponding string (roundabout, but easiest)
@@ -111,7 +109,7 @@ class PDP11InstructionAssembler:
         # bail out if spaces in middle, and remove spaces at ends
         s = operand.split()
         if len(s) > 1:
-            raise valerr()
+            raise cannotparse
         operand = s[0]
 
         # operand now fully normalized: upper case, no spaces.
@@ -120,11 +118,11 @@ class PDP11InstructionAssembler:
         # It will (must) start with either '$', or '*$' if so.
         try:
             if operand[0] == '$':
-                return [0o27, self.immediate_value(operand[1:])]
+                return [0o27, self.immediate_value(operand)]
             elif operand.startswith('*$'):
-                return [0o37, self.immediate_value(operand[2:])]
+                return [0o37, self.immediate_value(operand[1:])]
         except ValueError:
-            raise valerr() from None
+            raise cannotparse from None
 
         # wasn't immediate, see if it matches the precomputed modes
         try:
@@ -144,17 +142,17 @@ class PDP11InstructionAssembler:
         # for starters, it must contain one '(' so should split to 2
         s = operand.split('(')
         if len(s) != 2:
-            raise valerr()
+            raise cannotparse
         idxval = self.immediate_value(s[0])
 
         # the back end of this, with the '(' put back on,
         # must end with ')' and must parse
         if s[1][-1] != ')':
-            raise valerr()
+            raise cannotparse
         try:
             b6 = self.B6MODES['(' + s[1]]
         except KeyError:
-            raise valerr() from None
+            raise cannotparse from None
         return [mode | (b6 & 0o07), idxval]
 
     # gets overridden in InstructionBlock to track generated instructions
@@ -173,17 +171,15 @@ class PDP11InstructionAssembler:
     def _1op(self, operation, dst):
         """dst can be None for, essentially, a _0op."""
         if dst is None:
-            dst6 = 0
-            dst_i = []
+            return self._seqwords([operation])
         else:
             dst6, *dst_i = self.operand_parser(dst)
-        return self._seqwords([operation | dst6, *dst_i])
+            return self._seqwords([operation | dst6, *dst_i])
 
     # XXX the instructions are not complete, this is being developed
     #     as needed for pdptests.py
-    #
-    # ALSO: see InstructionBlock for (primitive) branching support
-    #
+    # ALSO: see InstructionBlock for branch support
+
     def mov(self, src, dst):
         return self._2op(0o010000, src, dst)
 
@@ -264,6 +260,55 @@ class PDP11InstructionAssembler:
         return self._1op(inst, oprnd)
 
 
+class FwdRef:
+    """Values determined by a not-yet-seen label() definition."""
+
+    def __init__(self, name, block):
+        self.loc = len(block)
+        self.name = name
+        self.block = block
+        block._fwdrefs[name].append(self)
+
+    def __call__(self):
+        block = self.block
+        # the location to be patched is in one of three places, look for it:
+        for loco in (0, 1, 2):
+            if block._instblock[self.loc + loco] is self:
+                block._instblock[self.loc + loco] = self.transform()
+                break
+        else:
+            raise ValueError(f"could not find FwdRef {self}")
+
+    def words(self):
+        return [0o27, self]
+
+    def transform(self):
+        return self.block.getlabel(self.name) - (2 * self.loc)
+
+
+class BranchTarget(FwdRef):
+    def __init__(self, brcode, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.__brcode = brcode
+
+    @staticmethod
+    def branchencode(brcode, offs, name):
+        """The guts of encoding/checking a branch offset."""
+
+        # offs is in 16-bit form as a byte offset; convert it to
+        # 8-bit branch (word offset) form and make sure not too big
+
+        if offs > 254 and offs < (65536 - 256):
+            raise ValueError(f"branch target ('{name}') too far.")
+        offs >>= 1
+        return brcode | (offs & 0o377)
+
+    def transform(self):
+        """Called when a forward branch ref is ready to be resolved."""
+        offs = self.block.getlabel(self.name) - (2 * (self.loc + 1))
+        return self.branchencode(self.__brcode, offs, self.name)
+
+
 # An InstructionBlock is a thin layer on just accumulating a sequence
 # of results from calling the instruction methods.
 #
@@ -286,8 +331,13 @@ class PDP11InstructionAssembler:
 #
 # The context manager also supports bare-bones labels, helpful for branches
 #
-# A list of instructions in an InstructionBlock can be obtained at any
-# time via:   insts = a.instructions()
+# Use:
+#
+#   instlist = a.instructions()
+#
+# to get a list of instructions. By default, instructions() raises
+# a ValueError if there are dangling forward references. This can be
+# suppressed (usually for debugging) by a.instructions(allow_dangling=True)
 #
 
 class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
@@ -295,7 +345,7 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         super().__init__()
         self._instblock = []
         self._labels = {}
-        self._fwdrefs = {}
+        self._fwdrefs = defaultdict(list)
 
     def _seqwords(self, seq):
         """seq can be an iterable, or a naked (integer) instruction."""
@@ -304,6 +354,15 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         except TypeError:
             self._instblock += [seq]
         return seq
+
+    def operand_parser(self, operand_token, *args, **kwargs):
+        # If operand_token duck-types as a FwdRef, use whatever
+        # stream sequence representation it supplies; otherwise parse
+        # the operand token the usual (superclass) way.
+        try:
+            return operand_token.words()
+        except AttributeError:
+            return super().operand_parser(operand_token, *args, **kwargs)
 
     def __len__(self):
         """Returns the length of the sequence in WORDS"""
@@ -325,17 +384,6 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
             except KeyError:
                 pass
             return int(w, 8)
-
-    @staticmethod
-    def _fwdword(fref):
-
-        block = fref.block
-        # the location to be patched is in one of three places, look for it:
-        for loco in (0, 1, 2):
-            if block._instblock[fref.loc + loco] is fref:
-                break
-        fwdoffs = block.getlabel(fref.name) - (2*fref.loc)
-        block._instblock[fref.loc + loco] = fwdoffs
 
     def label(self, name, *, value='.'):
         """Record the current position, or 'value', as 'name'.
@@ -363,37 +411,29 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
 
         self._labels[name] = value_tokens[0]
 
-        try:
-            frefs = self._fwdrefs[name]
-        except KeyError:
-            pass
-        else:
-            for fref in frefs:
-                fref.f(fref)
-            del self._fwdrefs[name]
+        # if there were any forward references to this name, process them
+        for fref in self._fwdrefs[name]:
+            fref()
+        del self._fwdrefs[name]
 
         return self._labels[name]
 
-    def getlabel(self, name, *, callback=None):
-        """Return value (loc) of name; register a callback if fwd ref.
+    def getlabel(self, name, *, fwdfactory=FwdRef):
+        """Return value (loc) of name, which may be a FwdRef object.
 
-        If no callback given the default word-substitution callback is used,
-        which is generally sufficient for most operand purposes, e.g.:
-              a.mov(a.getlabel('foo'), 'r0')
-        will work just fine if 'foo' is a forward reference.
+        If the label is a forward reference, the fwdfactory argument
+        (default=FwdRef) will be used to create a FwdRef object placed
+        into the instruction stream until resolved later. The default FwdRef
+        class patches in a 16-bit value once known.  Branch (and other)
+        instructions supply FwdRef subclasses via fwdfactory for customized
+        encoding/processing of resolved references.
+
+        If fwdfactory is None, forward references raise a TypeError
         """
         try:
             return self._labels[name]
         except KeyError:
-            if callback is None:
-                callback = self._fwdword
-            # otherwise, register the callback and return None.
-            fref = FwdRef(f=callback, loc=len(self), name=name, block=self)
-            try:
-                self._fwdrefs[name].append(fref)
-            except KeyError:
-                self._fwdrefs[name] = [fref]
-            return fref
+            return fwdfactory(name=name, block=self)
 
     @staticmethod
     def _neg16(x):
@@ -414,7 +454,7 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
 
         # If it's a str, treat it as a (possibly-forward-ref) label
         if isinstance(x, str):
-            offs = self.getlabel(x, callback=self._branchpatch)
+            offs = self.getlabel(x)
             if isinstance(offs, FwdRef):
                 return 0
             else:
@@ -423,48 +463,48 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
 
         return self._neg16(x)
 
-    # branches can have forward references (of course), but the offset
-    # doesn't occupy a full 16-bit word. What this does is turn the
-    # branch location in the instruction stream into a 16-bit FwdRef
-    # but with a customized handler to validate and modify the branch
-    # offset once it becomes known, and to OR it with the branch code.
-    def _branchhandler(self, opcode, target):
-        # TBD / changes to come
-        pass
+    def _branchcommon(self, target, *, fwdfactory=None):
+        """Common logic for bne, bgt, etc including unconditional br."""
 
-    # can't use the standard fwdword patcher because the offset
-    # needs to be divided by 2 and checked if fits within 8 bits
-    def _branchpatch(self, fref):
-        fwdoffs = self.getlabel(fref.name) - (2 * (fref.loc + 1))
-        block = fref.block
-        block._instblock[fref.loc] |= block.bxx_offset(fwdoffs)
-
-    # Branch instruction support only exists within a given InstructionBlock
-    def bxx_offset(self, target, /):
-        """Generate offset for Bxx target
-
-        A target can be a string label or a number. Numbers are taken as-is.
-        Names are looked up in the labels and offsets generated.
-        """
+        # target at this point can be:
+        #    An integer -- treat directly as an offset value
+        #    A string representing a direct offset - parse/use
+        #    A label -- possibly forward reference or not
 
         try:
-            offs = self._branch_label_or_offset(target)
+            if target.startswith('$'):
+                x = self.immediate_value(target)
+            else:
+                # it's a label, which may or may not be forward ref
+                x = self.getlabel(target, fwdfactory=fwdfactory)
+                try:
+                    x -= (2 * (len(self) + 1))
+                except TypeError:     # a forward reference
+                    pass
+        except AttributeError:
+            # it's not a string, assume it is an offset
+            x = target
 
-        except ValueError:
-            raise ValueError(f"branch target ({target}) too far or illegal")
-
-        # offsets come back from _label.. in 16-bit form, as byte offsets
-        # convert to 8 bit and word offset, and make sure not too big
-        if offs > 254 and offs < (65536 - 256):
-            raise ValueError(f"branch target ('{target}') too far.")
-        offs >>= 1
-        return offs & 0o377
+        # At this point it's either a number or a forward ref.
+        # For numbers, complete everything now.
+        # For forward refs, that work is deferred.
+        try:
+            x = self._neg16(x)
+        except TypeError:
+            pass
+        return x
 
     # dynamically construct the methods for all the Bxx branches
     # This makes methods: beq, bne, bgt, etc
     for _bname, _code in BRANCH_CODES.items():
         def branchxx(self, target, code=_code):
-            return self.literal(code | self.bxx_offset(target))
+            bxxfactory = partial(BranchTarget, code)
+            w = self._branchcommon(target, fwdfactory=bxxfactory)
+            # it's either an integer offset or a forward reference.
+            # Encode integers now; forward references are encoded later
+            if isinstance(w, int):
+                w = BranchTarget.branchencode(code, offs=w, name=target)
+            return self._seqwords([w])
         branchxx.__name__ = _bname
         setattr(PDP11InstructionAssembler, _bname, branchxx)
     del _bname, _code, branchxx
@@ -479,41 +519,26 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
             if len(lc) == 2 and lc[0] == 'r':
                 reg = int(lc[1:])
 
-        # note: target can't be forward reference; sob only goes backwards
-        offs = self._branch_label_or_offset(target)
+        # NOTE: forward references illegal; no fwdfactory given
+        try:
+            x = self._branchcommon(target)
+        except (ValueError, TypeError):
+            raise ValueError(f"sob '{target}' illegal target") from None
 
-        # offsets are always negative and are allowed from 0 to -126
-        # but they come from _label... as two's complement, so:
-        if offs < 0o177602:    # (65536-126)
-            raise ValueError(f"sob illegal target {target}")
+        # stricter limits on the offset size for sob:
+        #   Must be between 0 and -126
+        if x < 0o177602:    # (65536-126)
+            raise ValueError(f"sob target ({x}) too far")
 
-        return self.literal(0o077000 | (reg << 6) | (((-offs) >> 1) & 0o77))
+        return self.literal(0o077000 | (reg << 6) | (((-x) >> 1) & 0o77))
 
-    def instructions(self):
-        # it is an error to request the instructions if there are unresolved
-        # forward references. This is where that is enforced.
-        if self._fwdrefs:
+    def instructions(self, *, allow_dangling=False):
+        # By default, it is an error to request the instructions if there
+        # are unresolved forward references.
+        if self._fwdrefs and not allow_dangling:
             raise ValueError(f"unresolved references: "
                              f"{list(self._fwdrefs)}")
         return self._instblock
-
-    # this is a convenience that allows a list of words (usually instructions)
-    # to be "embedded" into an InstructionBlock with a leading jmp .+N
-    # to jump over it.
-    def jump_over_and_embed(self, words, /, *, name=None):
-        """Embed words with leading 'jumpover'; returns offset of words
-
-        If optional name given, creates a label for the words
-        """
-        if name is None:
-            # an internal label name is generated instead
-            name = f"__{id(object)}"
-
-        self.jmp(f"{len(words)*2}.(pc)")
-        words_offs = self.label(name)
-        for w in words:
-            self.literal(w)
-        return words_offs
 
     def simh(self, *, startaddr=0o10000):
         """Generate lines of SIMH deposit commands."""

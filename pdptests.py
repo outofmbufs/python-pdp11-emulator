@@ -1365,9 +1365,9 @@ if __name__ == "__main__":
 
         t = TestMethods()
         p, pc = t.speed_test_setup(loopcount=20, inst=args.instruction)
-        t = timeit.timeit(stmt='t.speed_test_run(p, pc)',
-                          number=1000, globals=globals())
-        tnsec = round(1000 * t, 1)
+        ta = timeit.repeat(stmt='t.speed_test_run(p, pc)',
+                           number=1000, globals=globals(), repeat=5)
+        tnsec = round(1000 * min(*ta), 1)
         print(f"Instruction {oct(args.instruction)} took {tnsec} nsecs")
     else:
         unittest.main()
