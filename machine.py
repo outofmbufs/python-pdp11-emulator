@@ -141,7 +141,7 @@ class PDP11:
     # priority). See HIGHEST_ABORTTRAP in STRAPBITS and the try/except
     # in the main instruction processing loop.
 
-    # there is no significant to the specific values, other than
+    # there is no significance to the specific values, other than
     # they must be single bits and they must sort in this order
     STRAPBITS = SimpleNamespace(
 
@@ -225,9 +225,11 @@ class PDP11:
         self.error_register = 0    # CPU Error register per handbook
 
         # NOTE: The cold machine starts out in stack limit violation.
-        # However, the semantics are that no check happens until something
-        # stack-related occurs. Boot programs need to establish a valid
-        # stack early in their instruction sequence.
+        # (stack pointer = 0). However, the limit semantics only apply
+        # during explicit stack push operations such as: mov foo,-(sp)
+        # or implicit pushes during traps/interrupts.
+        # Programs such as boot-loaders running from cold-start conditions
+        # should establish a valid stack early in their instruction sequence.
         self.stack_limit_register = 0
 
         # straps: keeps track of requests for synchronous traps
@@ -238,7 +240,9 @@ class PDP11:
         #         - mmu management traps (note: these are not aborts)
         #           ... others?
         #
+        # _strapsclear contains straps to clear during/after processing
         self.straps = 0
+        self._strapsclear = 0
 
         # start off in halted state until .run() happens
         self.halted = True
@@ -621,10 +625,11 @@ class PDP11:
         # Note special semantic of zero which means 0o400
         # (as defined by hardware book)
         lim = self.stack_limit_register or 0o400
-        if self.r[self.SP] <lim:
-            self.logger.info(f"YELLOW ZONE, {list(map(oct, self.r))}")
-            # definitely in at least a yellow condition
-            self.straps |= self.STRAPBITS.YELLOW
+        if self.r[self.SP] < lim:
+            if not (self.straps & self.STRAPBITS.YELLOW):
+                self.logger.info(f"YELLOW ZONE, {list(map(oct, self.r))}")
+                # definitely in at least a yellow condition
+                self.straps |= self.STRAPBITS.YELLOW
 
             # how about red?
             if self.r[self.SP] + 32 < lim:    # uh oh - below the yellow!
@@ -632,8 +637,7 @@ class PDP11:
                 # the stack pointer is set to location 4
                 # and this trap is executed
                 self.r[self.SP] = 4             # !! just enough room for...
-                raise PDPTraps.AddressError(
-                    cpuerr=self.CPUERR_BITS.REDZONE, is_redyellow=True)
+                raise PDPTraps.AddressError(cpuerr=self.CPUERR_BITS.REDZONE)
 
     def get_synchronous_trap(self, abort_trap):
         """Return a synchronous trap, or possibly None.
@@ -669,11 +673,6 @@ class PDP11:
         # and would therefore come back with the next instruction and
         # (potentially) fire there instead.
 
-        # no synchronous traps honored in certain error states
-        ignores = self.CPUERR_BITS.REDZONE | self.CPUERR_BITS.YELLOW
-        if self.error_register & ignores:
-            return None
-
         # The stack limit yellow bit is a little different ... have
         # to also check for the red zone here.
         if self.straps & self.STRAPBITS.YELLOW:
@@ -686,9 +685,8 @@ class PDP11:
             self.straps &= ~self.STRAPBITS.MEMMGT
             return PDPTraps.MMU()
         elif self.straps & self.STRAPBITS.YELLOW:   # red handled as an abort
-            self.straps &= ~self.STRAPBITS.YELLOW
-            return PDPTraps.AddressError(
-                cpuerr=self.CPUERR_BITS.YELLOW, is_redyellow=True)
+            self._strapsclear = self.STRAPBITS.YELLOW
+            return PDPTraps.AddressError(cpuerr=self.CPUERR_BITS.YELLOW)
         return None
 
     def go_trap(self, trap):
@@ -727,10 +725,9 @@ class PDP11:
         self.psw_prevmode = saved_curmode   # i.e., override newps<13:12>
 
         prepushSP = self.r[6]
-        skip_redyellow = trap.trapinfo.get('is_redyellow', False)
         try:
-            self.stackpush(saved_psw, skip_redyellow=skip_redyellow)
-            self.stackpush(self.r[self.PC], skip_redyellow=skip_redyellow)
+            self.stackpush(saved_psw)
+            self.stackpush(self.r[self.PC])
         except PDPTrap as e:
             # again this is a pretty egregious error it means the kernel
             # stack is not mapped, or the stack pointer is odd, or similar
@@ -742,6 +739,12 @@ class PDP11:
 
         # The error register records (accumulates) reasons (if given)
         self.error_register |= trap.cpuerr
+
+        # if a strap is being processed, this is where it is reset
+        # IMPORTANT/SUBTLE NOTE: This is after the stack pushes, so this
+        # is how they avoid (re-)causing YELLOW while processing YELLOW
+        self.straps &= ~self._strapsclear
+        self._strapsclear = 0
 
         # alrighty then, can finally jump to the PC from the vector
         self.r[self.PC] = newpc
@@ -789,11 +792,11 @@ class PDP11:
             self.straps |= self.STRAPBITS.YELLOW
         self._stklim = v & 0o177400
 
-    def stackpush(self, w, skip_redyellow=False):
+    def stackpush(self, w):
         self.r[6] = self.u16add(self.r[6], -2)
         # stacklimit checks only apply to the kernel and do not
         # apply when pushing the frame for a stacklimit fault (!)
-        if self.psw_curmode == self.KERNEL and not skip_redyellow:
+        if self.psw_curmode == self.KERNEL:
             self.redyellowcheck()               # may raise a RED exception
         self.mmu.wordRW(self.r[6], w, space=self.mmu.DSPACE)
 
