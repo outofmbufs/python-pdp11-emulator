@@ -1288,37 +1288,97 @@ class TestMethods(unittest.TestCase):
         p.run(pc=base_address)
         self.assertEqual(p.r[0], 0)
 
-    def test_stacklim(self):
+    def test_stacklim0(self):
+        # verify that simply *having* an illegal SP doesn't trap
+        p = self.make_pdp()
+        with ASM() as a:
+            a.clr('r0')            # will be used to verify progress
+
+            # none of these bad stack pointers should cause
+            # a YELLOW trap as they are never used as stacks...
+            a.clr('sp')            # really it's already zero...
+            a.inc('r0')            # show made it to here
+            a.mov(1, 'sp')         # odd SP, very bad idea
+            a.inc('r0')            # show made it to here
+            a.mov(0o100, 'sp')     # still too low
+            a.inc('r0')            # show made it to here
+            a.halt()
+
+        aa = 0o4000
+        self.loadphysmem(p, a.instructions(), aa)
+        p.run(pc=aa)
+        self.assertEqual(p.r[0], 3)    # confirm made it all the way through
+
+    def test_stacklim1(self):
+        # Set the stack at the top of the yellow zone and then use it.
+        # This test should cause loopcount (3) YELLOW synchronous traps.
+        # Behavior and expected results verified by running identical
+        # machine code in SIMH
         p = self.make_pdp()
 
-        magic = 0o123456
-        # build the trap handler for testing stacklim
+        # memory usage:
+        # 0o4000.. is the test code
+        # 0o6000.. is the trap handler
+        # 0o7000.. is the log of various values collected in the trap handler
+
+        # r5 is used to walk through the 0o7000+ storage, it is initialized
+        # in the test code and used in the trap handler
+
         with ASM() as tr:
-            tr.mov('(sp)', 'r5')
-            tr.mov(magic, 'r0')
-            tr.mov(tr.ptr(0o177766), 'r1')
-            tr.halt()
+            # record...
+            tr.mov('r2', '(r5)+')                # ...separator/entry number
+            tr.mov('sp', '(r5)+')                # ...the sp
+            tr.mov('(sp)', '(r5)+')              # ...the trap-saved pc
+            tr.mov(tr.ptr(0o177766), '(r5)+')    # ...cpu error register
+            tr.mov('r2', '(r5)+')                # ...separator/entry number
+
+            # indicate successfully completed the above, bump entry number
+            tr.inc('r2')
+            tr.rtt()
         tra = 0o6000
         self.loadphysmem(p, tr.instructions(), tra)
 
+        recordmagic = 0o66000
         with ASM() as a:
             a.mov(0o400, 'sp')
+            a.mov(0o7000, 'r5')
+            a.mov(recordmagic, 'r2')
+
+            # dirty up the (to be pushed to) stack to verify writes happened
+            a.mov(0o370, 'r0')
+            a.mov('r0', '(r0)+')
+            a.mov('r0', '(r0)+')
+            a.mov('r0', '(r0)+')
+            a.mov('r0', '(r0)+')
+
+            # install the trap handler
             a.mov(tra, a.ptr(0o4))
             a.mov(0o340, a.ptr(0o6))
-            a.clr('r0')
+
+            loopcount = 3
+            a.mov(loopcount, 'r0')
+            a.label('push')
             a.clr('-(sp)')
-            a.label('fault')
+            a.sob('r0', 'push')
             a.halt()
+
         aa = 0o4000
         self.loadphysmem(p, a.instructions(), aa)
 
         p.run(pc=aa)
-        self.assertEqual(p.r[0], magic)
-        self.assertEqual(p.r[1], p.CPUERR_BITS.YELLOW)
-        self.assertEqual(p.r[5], aa + a.getlabel('fault'))
 
-        # this stack result was hand-verified in SIMH
-        self.assertEqual(p.r[6], 0o372)
+        # obtained by running above in SIMH
+        expected_7000 = [
+            # MARKER       SP       PC     CPUERR    MARKER
+            0o066000, 0o000372, 0o004052, 0o000010, 0o066000,
+            0o066001, 0o000370, 0o004052, 0o000010, 0o066001,
+            0o066002, 0o000366, 0o004052, 0o000010, 0o066002,
+            0]
+
+        recbase = 0o7000//2       # word address in phys mem
+        for i, val in enumerate(expected_7000):
+            with self.subTest(i=i, val=val):
+                self.assertEqual(val, p.physmem[recbase + i])
 
     def test_ubmap(self):
         p = self.make_pdp()
