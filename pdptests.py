@@ -1309,13 +1309,7 @@ class TestMethods(unittest.TestCase):
         p.run(pc=aa)
         self.assertEqual(p.r[0], 3)    # confirm made it all the way through
 
-    def test_stacklim1(self):
-        # Set the stack at the top of the yellow zone and then use it.
-        # This test should cause loopcount (3) YELLOW synchronous traps.
-        # Behavior and expected results verified by running identical
-        # machine code in SIMH
-        p = self.make_pdp()
-
+    def _stacklimcode(self, go_red=False):
         # memory usage:
         # 0o4000.. is the test code
         # 0o6000.. is the trap handler
@@ -1324,17 +1318,27 @@ class TestMethods(unittest.TestCase):
         # r5 is used to walk through the 0o7000+ storage, it is initialized
         # in the test code and used in the trap handler
 
+        p = self.make_pdp()
+
         with ASM() as tr:
             # record...
-            tr.mov('r2', '(r5)+')                # ...separator/entry number
-            tr.mov('sp', '(r5)+')                # ...the sp
-            tr.mov('(sp)', '(r5)+')              # ...the trap-saved pc
-            tr.mov(tr.ptr(0o177766), '(r5)+')    # ...cpu error register
-            tr.mov('r2', '(r5)+')                # ...separator/entry number
+            tr.mov('r2', '(r5)+')              # ...separator/entry number
+            tr.mov('sp', '(r5)+')              # ...the sp
+            tr.mov('(sp)', '(r5)+')            # ...the trap-saved pc
+            tr.mov(tr.ptr(0o177766), 'r1')     # (will be used later)
+            tr.mov('r1', '(r5)+')              # ...cpu error register
+            tr.mov('r2', '(r5)+')              # ...separator/entry number
 
             # indicate successfully completed the above, bump entry number
             tr.inc('r2')
+
+            # but if RED trap, stop here.
+            tr.bit(p.CPUERR_BITS.REDZONE, 'r1')
+            tr.beq('rtt')
+            tr.halt()
+            tr.label('rtt')
             tr.rtt()
+
         tra = 0o6000
         self.loadphysmem(p, tr.instructions(), tra)
 
@@ -1355,7 +1359,7 @@ class TestMethods(unittest.TestCase):
             a.mov(tra, a.ptr(0o4))
             a.mov(0o340, a.ptr(0o6))
 
-            loopcount = 3
+            loopcount = 3 if not go_red else 30   # will never get to 30
             a.mov(loopcount, 'r0')
             a.label('push')
             a.clr('-(sp)')
@@ -1364,15 +1368,66 @@ class TestMethods(unittest.TestCase):
 
         aa = 0o4000
         self.loadphysmem(p, a.instructions(), aa)
+        p.r[p.PC] = aa
+        return p
 
-        p.run(pc=aa)
+    def test_stacklim1(self):
+        # Set the stack at the top of the yellow zone and then use it.
+        # This test should cause loopcount (3) YELLOW synchronous traps.
+        # Behavior and expected results verified by running identical
+        # machine code in SIMH
 
-        # obtained by running above in SIMH
+        # r5 is used to walk through the 0o7000+ storage, it is initialized
+        # in the test code and used in the trap handler
+
+        p = self._stacklimcode()
+        p.run()
+
+        # obtained by running machine code in SIMH
         expected_7000 = [
             # MARKER       SP       PC     CPUERR    MARKER
             0o066000, 0o000372, 0o004052, 0o000010, 0o066000,
             0o066001, 0o000370, 0o004052, 0o000010, 0o066001,
             0o066002, 0o000366, 0o004052, 0o000010, 0o066002,
+            0]
+
+        recbase = 0o7000//2       # word address in phys mem
+        for i, val in enumerate(expected_7000):
+            with self.subTest(i=i, val=val):
+                self.assertEqual(val, p.physmem[recbase + i])
+
+    def test_stacklim_red(self):
+        p = self._stacklimcode(go_red=True)
+        p.run()
+
+        # Behavior/results verified by running machine code on SIMH;
+        # however, SIMH halts the simulation on the red stack trap and
+        # requires intervention to continue into the actual trap handler.
+        # Doing that (i.e., "CONTINUE") leads to these same results.
+        self.assertEqual(p.r[1], 0o14)      # RED|YELLOW
+        self.assertEqual(p.r[2], 0o66021)   # known magic iteration marker
+        self.assertEqual(p.r[6], 0)         # stack should be at zero
+
+        # obtained by running machine code in SIMH
+        expected_7000 = [
+            # MARKER       SP       PC     CPUERR    MARKER
+            0o066000, 0o000372, 0o004052, 0o000010, 0o066000,
+            0o066001, 0o000370, 0o004052, 0o000010, 0o066001,
+            0o066002, 0o000366, 0o004052, 0o000010, 0o066002,
+            0o066003, 0o000364, 0o004052, 0o000010, 0o066003,
+            0o066004, 0o000362, 0o004052, 0o000010, 0o066004,
+            0o066005, 0o000360, 0o004052, 0o000010, 0o066005,
+            0o066006, 0o000356, 0o004052, 0o000010, 0o066006,
+            0o066007, 0o000354, 0o004052, 0o000010, 0o066007,
+            0o066010, 0o000352, 0o004052, 0o000010, 0o066010,
+            0o066011, 0o000350, 0o004052, 0o000010, 0o066011,
+            0o066012, 0o000346, 0o004052, 0o000010, 0o066012,
+            0o066013, 0o000344, 0o004052, 0o000010, 0o066013,
+            0o066014, 0o000342, 0o004052, 0o000010, 0o066014,
+            0o066015, 0o000340, 0o004052, 0o000010, 0o066015,
+            0o066016, 0o000336, 0o004052, 0o000010, 0o066016,
+            0o066017, 0o000334, 0o004052, 0o000010, 0o066017,
+            0o066020, 0o000000, 0o004052, 0o000014, 0o066020,
             0]
 
         recbase = 0o7000//2       # word address in phys mem

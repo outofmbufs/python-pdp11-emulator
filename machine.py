@@ -628,8 +628,6 @@ class PDP11:
         if self.r[self.SP] < lim:
             if not (self.straps & self.STRAPBITS.YELLOW):
                 self.logger.info(f"YELLOW ZONE, {list(map(oct, self.r))}")
-                # definitely in at least a yellow condition
-                self.straps |= self.STRAPBITS.YELLOW
 
             # how about red?
             if self.r[self.SP] + 32 < lim:    # uh oh - below the yellow!
@@ -638,6 +636,8 @@ class PDP11:
                 # and this trap is executed
                 self.r[self.SP] = 4             # !! just enough room for...
                 raise PDPTraps.AddressError(cpuerr=self.CPUERR_BITS.REDZONE)
+            else:
+                self.straps |= self.STRAPBITS.YELLOW
 
     def get_synchronous_trap(self, abort_trap):
         """Return a synchronous trap, or possibly None.
@@ -724,18 +724,7 @@ class PDP11:
         self.psw = newps
         self.psw_prevmode = saved_curmode   # i.e., override newps<13:12>
 
-        prepushSP = self.r[6]
-        try:
-            self.stackpush(saved_psw)
-            self.stackpush(self.r[self.PC])
-        except PDPTrap as e:
-            # again this is a pretty egregious error it means the kernel
-            # stack is not mapped, or the stack pointer is odd, or similar
-            # very bad mistakes by the kernel code. It is a fatal halt
-            # NOTE: The stack register is restored
-            self.logger.info(f"Trap pushing trap onto stack")
-            self.r[6] = prepushSP
-            self.halted = self.HALTED_STACK
+        self._trappush(self.r[self.PC], saved_psw)
 
         # The error register records (accumulates) reasons (if given)
         self.error_register |= trap.cpuerr
@@ -804,6 +793,27 @@ class PDP11:
         w = self.mmu.wordRW(self.r[6], space=self.mmu.DSPACE)
         self.r[6] = self.u16add(self.r[6], 2)
         return w
+
+    # this is special because stack limit checking is disabled
+    # during pushes of trap/interrupt frames. Any other types of
+    # traps during a stack trap push are a fatal CPU halt and represent
+    # a serious kernel programming error (invalid kernel stack)
+    def _trappush(self, pc, psw):
+        try:
+            # NOTE: The stack pointer is only modified if
+            #       both of these succeed with no mmu/addressing traps
+            self.mmu.wordRW_KD(self.u16add(self.r[self.SP], -2), psw)
+            self.mmu.wordRW_KD(self.u16add(self.r[self.SP], -4), pc)
+        except PDPTrap as e:
+            # again this is a pretty egregious error it means the kernel
+            # stack is not mapped, or the stack pointer is odd, or similar
+            # very bad mistakes by the kernel code. It is a fatal halt
+            self.logger.info(f"Trap ({e}) pushing trap {trap} onto stack")
+            self.logger.info(f"Machine state: {self.machinestate()}")
+            self.logger.info("HALTING")
+            self.halted = self.HALTED_STACK
+        else:
+            self.r[self.SP] = self.u16add(self.r[self.SP], -4)
 
 
 class PDP1170(PDP11):
