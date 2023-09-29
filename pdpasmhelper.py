@@ -54,6 +54,11 @@ class PDP11InstructionAssembler:
     def __exit__(self, *args, **kwargs):
         return None
 
+    def __iter__(self):
+        if self._fwdrefs:
+            raise ValueError(f"unresolved refs: " f"{list(self._fwdrefs)}")
+        return iter(self._instblock)
+
     def immediate_value(self, s):
 
         # called in various contexts which may or may not
@@ -331,13 +336,16 @@ class BranchTarget(FwdRef):
 #
 # The context manager also supports bare-bones labels, helpful for branches
 #
-# Use:
+# If treated as an iterable, returns a list of instruction words.
+# Typically used like this:
 #
-#   instlist = a.instructions()
+#   instlist = list(a)
 #
-# to get a list of instructions. By default, instructions() raises
-# a ValueError if there are dangling forward references. This can be
-# suppressed (usually for debugging) by a.instructions(allow_dangling=True)
+# or perhaps 'for x in a:'
+#
+# NOTE: If there are dangling forward references asking for the instructions
+#       raises a ValueError. This can be suppressed (usually only useful
+#       for debugging) by requesting a._instructions()
 #
 
 class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
@@ -529,18 +537,15 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
 
         return self.literal(0o077000 | (reg << 6) | (((-x) >> 1) & 0o77))
 
-    def instructions(self, *, allow_dangling=False):
+    def _instructions(self):
         # By default, it is an error to request the instructions if there
-        # are unresolved forward references.
-        if self._fwdrefs and not allow_dangling:
-            raise ValueError(f"unresolved references: "
-                             f"{list(self._fwdrefs)}")
-        return self._instblock
+        # are unresolved forward references. This is a way around that.
+        return list(self._instblock)
 
     def simh(self, *, startaddr=0o10000):
         """Generate lines of SIMH deposit commands."""
 
-        for offs, w in enumerate(self.instructions()):
+        for offs, w in enumerate(self):
             yield f"D {oct(startaddr + (2 * offs))[2:]} {oct(w)[2:]}"
 
 
@@ -580,7 +585,7 @@ if __name__ == "__main__":
             self.assertEqual(a.getlabel('B'), 4)
             self.assertEqual(a.getlabel('BP2'), 6)
             self.assertEqual(a.getlabel('BP2'), a.getlabel('bozo'))
-            self.assertEqual(a.instructions()[1], 6)
+            self.assertEqual(list(a)[1], 6)
 
         def test_labelmath_plus(self):
             with ASM() as a:
@@ -601,7 +606,7 @@ if __name__ == "__main__":
                 a.clr('r0')
                 a.mov(a.getlabel('xyzzy'), 'r0')
             with self.assertRaises(ValueError):
-                foo = a.instructions()
+                foo = list(a)
 
         def test_sob(self):
             for i in range(63):   # 0..62 because the sob also counts
