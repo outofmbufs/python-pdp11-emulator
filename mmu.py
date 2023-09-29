@@ -279,8 +279,10 @@ class MemoryMgmt:
         segno = vaddr >> 13
 
         # the segment number and these other parameters form
-        # a "translation key" used in several places
-        xkey = self.TransKey(segno, mode, space, cycle)
+        # a "translation key" used in several places. Unfortunately,
+        # the namedtuple construction is enough overhead to matter in
+        # this critical/fast path, so caching uses tuple key
+        tuplexkey = (segno, mode, space, cycle)
 
         # All this translation code takes quite some time; caching
         # dramatically improves performance.
@@ -288,11 +290,13 @@ class MemoryMgmt:
         if self.nocache and self.segcache:
             self.segcache = {}
         try:
-            xoff, validation_func = self.segcache[xkey]
-            if validation_func(vaddr):
+            xoff, validation_func = self.segcache[tuplexkey]
+            if (validation_func is None) or validation_func(vaddr):
                 return vaddr + xoff
         except KeyError:
             pass
+
+        xkey = self.TransKey(segno, mode, space, cycle)
 
         # not cached; do the translation...
 
@@ -349,7 +353,7 @@ class MemoryMgmt:
 
         # only non-trapping can be cached
         if straps == 0:
-            self._encache(xkey, pdr, pa - vaddr)
+            self._encache(tuplexkey, pdr, pa - vaddr)
         return pa
 
     def _encache(self, k, pdr, offs):
@@ -362,7 +366,7 @@ class MemoryMgmt:
         elif (pdr & 0o10) == 0 and plf < 0o177:
             self.segcache[k] = (offs, lambda a: ((a >> 6) & 0o177) <= plf)
         else:
-            self.segcache[k] = (offs, lambda a: True)   # full segment
+            self.segcache[k] = (offs, None)   # full segment
 
     def _foldspaces(self, mode, space):
         """Folds DSPACE back into ISPACE if DSPACE not enabled for mode"""
