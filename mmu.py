@@ -84,14 +84,6 @@ class MemoryMgmt:
         # parameters must (of course) dump some, or all, of this cache.
         self.segcache = {}
 
-        self.MMR0 = 0
-        self.MMR1 = 0
-        self.MMR2 = 0
-        self.MMR3 = 0
-
-        self.MMR1_staged = 0
-        self.nocache = nocache
-
         # per the architecture manual, there are six (!) sets of
         # eight 32-bit Active Page Registers (APR0 ... APR7) where
         # each APR can be thought of as a 16-bit page address register (PAR)
@@ -106,6 +98,19 @@ class MemoryMgmt:
         # of the psw mode bits is illegal (enforced elsewhere).
 
         self.APR = [[[0, 0] for _ in range(8)] for setno in range(8)]
+
+        self.MMR0 = 0
+        self.MMR1 = 0
+        self.MMR2 = 0
+        self.MMR3 = 0
+
+        self.MMR1_staged = 0
+        self.nocache = nocache
+
+        # to accelerate v2p, instead of having to look up the status of
+        # I/D separation and possibly fold I/D space requests, compute
+        # a shadow "unfolded" version that bakes that in.
+        self._unfoldAPR()
 
         # register I/O space PDR/PARs: SUPER/KERNEL/USER blocks of 32 regs.
         #
@@ -159,6 +164,7 @@ class MemoryMgmt:
             # Per the handbook - the A and W bits in a PDR are reset to
             # zero when either the PAR or PDR is written.
             aprfile[aprnum][1] &= ~0o0300
+            self._unfoldAPR()       # update the I/D unfolded
 
     @property
     def MMR0(self):
@@ -233,12 +239,14 @@ class MemoryMgmt:
         self.segcache = {}
         self.__rebaseIO()      # because 22bit affects where it ends up
 
-        # rather than store the kernel/super/user D-space enables,
         # store which space to use for D-space lookups
         self._Dspaces = {mode: [self.ISPACE, self.DSPACE][bool(value & mask)]
                          for mode, mask in ((self.cpu.KERNEL, 4),
                                             (self.cpu.SUPERVISOR, 2),
                                             (self.cpu.USER, 1))}
+
+        # to accelerate v2p the I/D space folding is precomputed
+        self._unfoldAPR()
 
     def __rebaseIO(self):
         """Where oh where has my little I/O page gone?"""
@@ -262,9 +270,6 @@ class MemoryMgmt:
 
         if mode is None:                    # the normal (not mtpi etc) case
             mode = self.cpu.psw_curmode
-
-        # fold I/D together (into I) if separation not on
-        space = self._foldspaces(mode, space)
 
         # the virtual address is broken down into three fields:
         #   <15:13> APF active page field. Selects the APR = par,pdr pair
@@ -300,7 +305,7 @@ class MemoryMgmt:
 
         # not cached; do the translation...
 
-        par, pdr = self._getapr(xkey)
+        par, pdr = self._getunfoldedapr(xkey)
 
         # In 22bit mode, the full 16 bits of the PAR are used.
         # In 18bit mode, the top four have to be masked off here.
@@ -368,19 +373,35 @@ class MemoryMgmt:
         else:
             self.segcache[k] = (offs, None)   # full segment
 
+    # to accelerate v2p, instead of having to look up the status of
+    # I/D separation for a given mode and possibly folding D space
+    # requests into the I space APRs, this computes an "unfolded" shadow
+    # version of the APRs that v2p can just use directly.
+
+    def _unfoldAPR(self):
+        self._unfoldedAPR = [[[0, 0] for _ in range(8)] for setno in range(8)]
+        for mode in (self.cpu.SUPERVISOR, self.cpu.KERNEL, self.cpu.USER):
+            for space in (self.ISPACE, self.DSPACE):
+                src = (mode * 2) + self._foldspaces(mode, space)
+                dst = (mode * 2) + space
+                for segno in range(8):
+                    self._unfoldedAPR[dst][segno] = self.APR[src][segno]
+
     def _foldspaces(self, mode, space):
         """Folds DSPACE back into ISPACE if DSPACE not enabled for mode"""
         return space if space == self.ISPACE else self._Dspaces[mode]
 
-    def _getapr(self, xkey):
-        """CAUTION: xkey must already be space-folded."""
+    def _getunfoldedapr(self, xkey):
         nth = (xkey.mode * 2) + xkey.space
-        return self.APR[nth][xkey.segno]
+        return self._unfoldedAPR[nth][xkey.segno]
 
     def _putapr(self, xkey, apr):
-        """CAUTION: xkey must already be space-folded."""
-        nth = (xkey.mode * 2) + xkey.space
-        self.APR[nth][xkey.segno] = list(apr)
+        """xkey should be unfolded; this puts the apr to BOTH places"""
+        unfoldednth = (xkey.mode * 2) + xkey.space
+        self._unfoldedAPR[unfoldednth][xkey.segno] = list(apr)
+
+        foldednth = (xkey.mode * 2) + self._foldspaces(xkey.mode, xkey.space)
+        self.APR[foldednth][xkey.segno] = list(apr)
 
     def _v2p_accesschecks(self, pdr, vaddr, xkey):
         """Raise traps or set post-instruction traps as appropriate.
