@@ -1452,7 +1452,7 @@ class TestMethods(unittest.TestCase):
 
     # this is not a unit test, invoke it using timeit etc
     def speed_test_setup(self, *, loopcount=200, mmu=True, inst=None):
-        """Set up a test run of 10*loopcount inst instructions.
+        """Set up a test run of 50*loopcount inst instructions.
 
         Returns tuple: p, pc
         """
@@ -1461,17 +1461,39 @@ class TestMethods(unittest.TestCase):
 
         # the returned pdp is loaded with instructions for setting up
         # the mmu; only do them if that's what is wanted
+        #
+        # NOTE: the test code is run in USER mode Because Reasons
+        # (was experimenting with virtual caches and this was helpful).
+        # The test code will run at (virtual/user) 0 when the MMU is
+        # enabled, or its physical location (0o20000) when off.
+
+        user_physloc = 0o20000
         if mmu:
-            p.run(pc=pc)
+            p.run(pc=pc)         # set up all those mappings
+            usermode_base = 0    # physical 0o20000 maps here in USER mode
+        else:
+            usermode_base = user_physloc
 
         # by default the instruction being timed will be MOV R1,R0
         # but other instructions could be used. MUST ONLY BE ONE WORD
         if inst is None:
             inst = 0o010100
 
-        # now load the test timing loop... 49 "inst" instructions
-        # and an SOB for looping (so 50 overall instructions per loop)
+        # this is the tiny kernel code used to set up and start
+        # each iteration of the user mode timing code. It slightly
+        # distorts the per-instruction overhead of course. C'est la vie.
+        with ASM() as k:
+            k.mov(0o20000, 'sp')           # establish proper kernel stack
+            k.mov(0o140340, '-(sp)')       # USER mode, no interrupts
+            k.mov(usermode_base, '-(sp)')  # pc start for loop/USER code
+            k.rtt()                        # off to the races!
 
+        kloc = 0o4000
+        for a2, w in enumerate(k.instructions()):
+            p.mmu.wordRW(kloc + (2 * a2), w)
+
+        # The test timing loop... 49 "inst" instructions
+        # and an SOB for looping (so 50 overall instructions per loop)
         with ASM() as a:
             a.mov(loopcount, 'r4')
             a.label('LOOP')
@@ -1481,11 +1503,10 @@ class TestMethods(unittest.TestCase):
             a.halt()
 
         insts = a.instructions()
-
-        instloc = 0o4000
         for a2, w in enumerate(insts):
-            p.mmu.wordRW(instloc + (2 * a2), w)
-        return p, instloc
+            p.physRW(user_physloc + (2 * a2), w)
+
+        return p, kloc
 
     def speed_test_run(self, p, instloc):
         """See speed_test_setup"""
@@ -1501,6 +1522,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--performance', action="store_true")
     parser.add_argument('-i', '--instruction', default=movr1r0, type=int)
+    parser.add_argument('--nommu', action="store_true")
     parser.add_argument('--clr', action="store_true")
     args = parser.parse_args()
 
@@ -1518,7 +1540,9 @@ if __name__ == "__main__":
             args.instruction = 0o005000
 
         t = TestMethods()
-        p, pc = t.speed_test_setup(loopcount=20, inst=args.instruction)
+        mmu = not args.nommu
+        inst = args.instruction
+        p, pc = t.speed_test_setup(loopcount=20, inst=inst, mmu=mmu)
         ta = timeit.repeat(stmt='t.speed_test_run(p, pc)',
                            number=1000, globals=globals(), repeat=10)
         tnsec = round(1000 * min(*ta), 1)
