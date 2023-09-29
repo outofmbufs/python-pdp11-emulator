@@ -177,7 +177,7 @@ class TestMethods(unittest.TestCase):
             a.halt()
 
         instloc = 0o4000             # 2K
-        self.loadphysmem(p, a.instructions(), instloc)
+        self.loadphysmem(p, a, instloc)
         return p, instloc
 
     # these tests end up testing other stuff too of course, including MMU
@@ -191,7 +191,7 @@ class TestMethods(unittest.TestCase):
                 a.mov(r1tval, 'r1')
                 a.mfpi('(r1)')
                 a.mov('(sp)+', 'r0')
-            tvecs.append((result, a.instructions()))
+            tvecs.append((result, list(a)),)
 
         for result, insts in tvecs:
             with self.subTest(result=result, insts=insts):
@@ -205,7 +205,6 @@ class TestMethods(unittest.TestCase):
         with ASM() as u:
             u.mov('r2', 'r6')
             u.trap(0)
-        user_mode_instructions = u.instructions()
 
         with ASM() as premmu:
             ts = premmu                    # just for brevity...
@@ -213,7 +212,7 @@ class TestMethods(unittest.TestCase):
             ts.clr(ts.ptr(0o36))           # PSW for trap - zero work
             ts.mov(0o20000, 'r0')          # mov #20000,r0
 
-            for uinst in user_mode_instructions:
+            for uinst in u:
                 ts.mov(uinst, '(r0)+')
             ts.mov(0o123456, 'r2')         # mov #123456,r2
             ts.mov(0o140340, '-(sp)')      # push user-ish PSW to K stack
@@ -222,15 +221,14 @@ class TestMethods(unittest.TestCase):
         with ASM() as postmmu:
             postmmu.literal(6)             # RTT - goes to user mode, addr 0
 
-        p, pc = self.simplemapped_pdp(premmu=premmu.instructions(),
-                                      postmmu=postmmu.instructions())
+        p, pc = self.simplemapped_pdp(premmu=premmu, postmmu=postmmu)
 
         # put the trap handler at 14000 as expected
         with ASM() as th:
             th.mfpd('sp')
             th.mov('(sp)+', 'r3')
             th.halt()
-        self.loadphysmem(p, th.instructions(), 0o14000)
+        self.loadphysmem(p, th, 0o14000)
         p.run(pc=pc)
         self.assertEqual(p.r[2], p.r[3])
 
@@ -243,7 +241,7 @@ class TestMethods(unittest.TestCase):
             ts.clr(ts.ptr(cn.MMR0))        # turn MMU back off
             ts.mov(ts.ptr(0o20002), 'r0')  # r0 = (020002)
 
-        tvecs = ((0o1717, ts.instructions()),)
+        tvecs = ((0o1717, ts),)
 
         for r0result, insts in tvecs:
             with self.subTest(r0result=r0result, insts=insts):
@@ -272,8 +270,7 @@ class TestMethods(unittest.TestCase):
             with ASM() as a:
                 getattr(a, addsub)('r0', 'r1')
                 a.halt()
-            for offs, inst in enumerate(a.instructions()):
-                p.physmem[(loc >> 1) + offs] = inst
+            self.loadphysmem(p, a, loc)
 
         for r0, r1, added, a_nzvc, subbed, s_nzvc in testvecs:
             with self.subTest(r0=r0, r1=r1, op="add"):
@@ -314,7 +311,7 @@ class TestMethods(unittest.TestCase):
             a.halt()
 
         instloc = 0o4000
-        self.loadphysmem(p, a.instructions(), instloc)
+        self.loadphysmem(p, a, instloc)
 
         p.run(pc=instloc)
         self.assertEqual(p.r[0], loopcount)
@@ -339,7 +336,7 @@ class TestMethods(unittest.TestCase):
             a.halt()
 
         instloc = 0o4000
-        self.loadphysmem(p, a.instructions(), instloc)
+        self.loadphysmem(p, a, instloc)
         p.run(pc=instloc)
         self.assertEqual(p.r[1], goodval)
 
@@ -379,7 +376,7 @@ class TestMethods(unittest.TestCase):
             a.halt()
             a.dec('r0')
             a.halt()
-        return a.instructions()
+        return a
 
     def test_cc(self):
         # various condition code tests
@@ -461,7 +458,7 @@ class TestMethods(unittest.TestCase):
 
         p = self.make_pdp()
         instloc = 0o4000
-        self.loadphysmem(p, a.instructions(), instloc)
+        self.loadphysmem(p, a, instloc)
         p.run(pc=instloc)
         self.assertEqual(p.r[2], 0o1224)
 
@@ -493,8 +490,7 @@ class TestMethods(unittest.TestCase):
 
         # put that mess into memory at an arbitrary spot
         baseloc = 0o10000
-        for a, w in enumerate(insts, start=(baseloc >> 1)):
-            p.physmem[a] = w
+        self.loadphysmem(p, insts, baseloc)
 
         # test the negative offsets:
         #  Set R0 to 65535 (-1)
@@ -640,7 +636,7 @@ class TestMethods(unittest.TestCase):
             handler.movb('-2(r0)', 'r3')
             handler.rtt()
 
-        self.loadphysmem(p, handler.instructions(), 0o10000)
+        self.loadphysmem(p, handler, 0o10000)
 
         # just bash a stack pointer directly in
         p.r[6] = 0o20000       # 8K and working down
@@ -651,7 +647,7 @@ class TestMethods(unittest.TestCase):
                 a.mov('r3', 'r1')  # MOV R3,R1 just to show RTT worked
                 a.halt()
 
-            self.loadphysmem(p, a.instructions(), 0o30000)
+            self.loadphysmem(p, a, 0o30000)
             p.run(pc=0o30000)
             self.assertEqual(p.r[3], p.r[1])
 
@@ -1154,7 +1150,7 @@ class TestMethods(unittest.TestCase):
                 # need to know DOWNTEST and BONUS
                 downtest = kaddr + b.getlabel('DOWNTEST')
                 bonus = kaddr + b.getlabel('BONUS')
-            self.loadphysmem(p, b.instructions(), addr)
+            self.loadphysmem(p, b, addr)
 
         with self.subTest(phase="UP"):
             # finally ready to run the whole shebang!
@@ -1284,7 +1280,7 @@ class TestMethods(unittest.TestCase):
             k.label('_done')
             k.halt()
 
-        self.loadphysmem(p, k.instructions(), base_address)
+        self.loadphysmem(p, k, base_address)
         p.run(pc=base_address)
         self.assertEqual(p.r[0], 0)
 
@@ -1305,7 +1301,7 @@ class TestMethods(unittest.TestCase):
             a.halt()
 
         aa = 0o4000
-        self.loadphysmem(p, a.instructions(), aa)
+        self.loadphysmem(p, a, aa)
         p.run(pc=aa)
         self.assertEqual(p.r[0], 3)    # confirm made it all the way through
 
@@ -1340,7 +1336,7 @@ class TestMethods(unittest.TestCase):
             tr.rtt()
 
         tra = 0o6000
-        self.loadphysmem(p, tr.instructions(), tra)
+        self.loadphysmem(p, tr, tra)
 
         recordmagic = 0o66000
         with ASM() as a:
@@ -1367,7 +1363,7 @@ class TestMethods(unittest.TestCase):
             a.halt()
 
         aa = 0o4000
-        self.loadphysmem(p, a.instructions(), aa)
+        self.loadphysmem(p, a, aa)
         p.r[p.PC] = aa
         return p
 
@@ -1489,7 +1485,7 @@ class TestMethods(unittest.TestCase):
             k.rtt()                        # off to the races!
 
         kloc = 0o4000
-        for a2, w in enumerate(k.instructions()):
+        for a2, w in enumerate(k):
             p.mmu.wordRW(kloc + (2 * a2), w)
 
         # The test timing loop... 49 "inst" instructions
@@ -1502,8 +1498,7 @@ class TestMethods(unittest.TestCase):
             a.sob('r4', 'LOOP')
             a.halt()
 
-        insts = a.instructions()
-        for a2, w in enumerate(insts):
+        for a2, w in enumerate(a):
             p.physRW(user_physloc + (2 * a2), w)
 
         return p, kloc
