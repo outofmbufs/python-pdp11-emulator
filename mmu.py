@@ -156,8 +156,13 @@ class MemoryMgmt:
         else:
             # dump any matching cache entries in both reading/writing form.
             for rw in (_CYCLE.READ, _CYCLE.WRITE):
-                if (aprnum, mode, space, rw) in self.segcache:
-                    del self.segcache[(aprnum, mode, space, rw)]
+                # the "space" is a dilemma because it is tied up in
+                # the unfolding of I/D space separation. It's not hard
+                # to figure out what to do but its also very easy to
+                # just do this: nuke both I and D space cache entries.
+                for xspc in (self.ISPACE, self.DSPACE):
+                    if (aprnum, mode, xspc, rw) in self.segcache:
+                        del self.segcache[(aprnum, mode, xspc, rw)]
 
             aprfile[aprnum][parpdr] = value
 
