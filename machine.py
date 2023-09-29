@@ -35,6 +35,7 @@ from kw11 import KW11
 
 from op4 import op4_dispatch_table
 
+
 # A note about the various opNxxx files:
 #
 # Conceptually all of those are part of the PDP11 class. But having one
@@ -808,7 +809,7 @@ class PDP11:
             # again this is a pretty egregious error it means the kernel
             # stack is not mapped, or the stack pointer is odd, or similar
             # very bad mistakes by the kernel code. It is a fatal halt
-            self.logger.info(f"Trap ({e}) pushing trap {trap} onto stack")
+            self.logger.info(f"Trap ({e}) pushing trap frame onto stack")
             self.logger.info(f"Machine state: {self.machinestate()}")
             self.logger.info("HALTING")
             self.halted = self.HALTED_STACK
