@@ -24,13 +24,6 @@ from functools import partial
 from pdptraps import PDPTraps
 from types import SimpleNamespace
 from collections import namedtuple
-from enum import Enum
-
-
-# used internally to represent reads vs writes
-class _CYCLE(Enum):
-    READ = 'r'
-    WRITE = 'w'
 
 
 class MemoryMgmt:
@@ -68,7 +61,7 @@ class MemoryMgmt:
     # memory control (parity, etc) is not implemented but needs to respond
     MCR_OFFS = 0o17746
 
-    TransKey = namedtuple('TransKey', ('segno', 'mode', 'space', 'cycle'))
+    TransKey = namedtuple('TransKey', ('segno', 'mode', 'space', 'reading'))
 
     def __init__(self, cpu, /, *, nocache=False):
 
@@ -155,14 +148,14 @@ class MemoryMgmt:
             return aprfile[aprnum][parpdr]
         else:
             # dump any matching cache entries in both reading/writing form.
-            for rw in (_CYCLE.READ, _CYCLE.WRITE):
+            for reading in (True, False):
                 # the "space" is a dilemma because it is tied up in
                 # the unfolding of I/D space separation. It's not hard
                 # to figure out what to do but its also very easy to
                 # just do this: nuke both I and D space cache entries.
                 for xspc in (self.ISPACE, self.DSPACE):
-                    if (aprnum, mode, xspc, rw) in self.segcache:
-                        del self.segcache[(aprnum, mode, xspc, rw)]
+                    if (aprnum, mode, xspc, reading) in self.segcache:
+                        del self.segcache[(aprnum, mode, xspc, reading)]
 
             aprfile[aprnum][parpdr] = value
 
@@ -265,9 +258,10 @@ class MemoryMgmt:
             if self._22bit:
                 self.iopage_base |= (15 << 18)  # ... and 4 more
 
-    def v2p(self, vaddr, mode, space, cycle):
+    def v2p(self, vaddr, mode, space, reading):
         """Convert a 16-bit virtual address to physical.
         NOTE: Raises traps, updates A/W bits, & sets straps as needed.
+        NOTE: 'reading' MUST be True or False, not anything else.
         """
 
         if not self._mmu_relo_enabled:
@@ -292,7 +286,7 @@ class MemoryMgmt:
         # a "translation key" used in several places. Unfortunately,
         # the namedtuple construction is enough overhead to matter in
         # this critical/fast path, so caching uses tuple key
-        tuplexkey = (segno, mode, space, cycle)
+        tuplexkey = (segno, mode, space, reading)
 
         # All this translation code takes quite some time; caching
         # dramatically improves performance.
@@ -306,7 +300,17 @@ class MemoryMgmt:
         except KeyError:
             pass
 
-        xkey = self.TransKey(segno, mode, space, cycle)
+        # AFTER the critical path can validate 'reading' which MUST
+        # be either True or False, and not just 'truthy'. It's ok
+        # to only check this after the fast path because bad values
+        # can't get into the fast path (since they are filtered here).
+        #
+        # NOTE: This is a coding error if it happens. This is why it is
+        #       not being silently corrected instead of ValueError'd.
+        if reading not in (True, False):
+            raise ValueError(f"Illegal value for reading: '{reading}'")
+
+        xkey = self.TransKey(segno, mode, space, reading)
 
         # not cached; do the translation...
 
@@ -348,7 +352,7 @@ class MemoryMgmt:
         # there are no further A/W bit updates to worry about (so they
         # can be cached at that point).
 
-        W_update = 0o100 if cycle == _CYCLE.WRITE else 0o000
+        W_update = 0o000 if reading else 0o100
         A_update = 0o200 if straps else 0o000
 
         AW_update = (W_update | A_update)
@@ -442,21 +446,21 @@ class MemoryMgmt:
         # cause no traps or aborts. So, for example, control mode 6
         # is not in the cases; nor is control mode 5 if reading.
 
-        cycle = xkey.cycle
+        reading = xkey.reading
         match pdr & 7:
             # control modes 0, 3, and 7 are always aborts
             case 0 | 3 | 7:
                 self.cpu.logger.debug(f"ABORT_NR trap, regs: "
                                       f"{list(map(oct, self.cpu.r))}"
                                       f", {oct(self.cpu.psw)}"
-                                      f", PDR={oct(pdr)} {cycle=}")
+                                      f", PDR={oct(pdr)} {reading=}")
                 self._raisetrap(self.MMR0_BITS.ABORT_NR, vaddr, xkey)
 
             # control mode 1 is an abort if writing, mgmt trap if read
-            case 1 if cycle == _CYCLE.READ:
+            case 1 if reading:
                 straps = self.cpu.STRAPBITS.MEMMGT
 
-            case 1 | 2 if cycle == _CYCLE.WRITE:
+            case 1 | 2 if not reading:
                 self._raisetrap(self.MMR0_BITS.ABORT_RDONLY, vaddr, xkey)
 
             # control mode 4 is mgmt trap on any access (read or write)
@@ -464,7 +468,7 @@ class MemoryMgmt:
                 straps = self.cpu.STRAPBITS.MEMMGT
 
             # control mode 5 is mgmt trap if WRITING
-            case 5 if cycle == _CYCLE.WRITE:
+            case 5 if not reading:
                 straps = self.cpu.STRAPBITS.MEMMGT
 
         return straps
@@ -476,8 +480,7 @@ class MemoryMgmt:
         If value is not None, perform a write; return None.
         """
 
-        cycle = _CYCLE.READ if value is None else _CYCLE.WRITE
-        pa = self.v2p(vaddr, mode, space, cycle)
+        pa = self.v2p(vaddr, mode, space, value is None)
         if pa >= self.iopage_base:
             return self.ub.mmio.wordRW(pa & self.cpu.IOPAGE_MASK, value)
         else:
@@ -490,8 +493,7 @@ class MemoryMgmt:
         If value is not None, perform a write; return None.
         """
 
-        cycle = _CYCLE.READ if value is None else _CYCLE.WRITE
-        pa = self.v2p(vaddr, mode, space, cycle)
+        pa = self.v2p(vaddr, mode, space, value is None)
 
         # Physical memory is represented as an array of 16-bit word
         # values, and byte operations are synthesized from that in
@@ -571,6 +573,6 @@ class MemoryMgmt:
         for xkey, v in self.segcache.items():
             ms = "KS!U"[xkey.mode]
             ds = "ID"[xkey.space]
-            s += f"{oct(xkey.segno << 13)}:{ms}{ds}{xkey.cycle} :"
+            s += f"{oct(xkey.segno << 13)}:{ms}{ds}{xkey.reading} :"
             s += f" {oct(v[0])}\n"
         return s
