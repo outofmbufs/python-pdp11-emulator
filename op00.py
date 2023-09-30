@@ -65,7 +65,12 @@ def op00_50_clr(cpu, inst, opsize=2):
     cpu.psw_n = cpu.psw_v = cpu.psw_c = 0
     cpu.psw_z = 1
 
-    cpu.operandx(inst & 0o77, 0, opsize=opsize)
+    dstb6 = (inst & 0o77)
+    # optimize the common register case
+    if opsize == 2 and dstb6 < 8:
+        cpu.r[dstb6] = 0
+    else:
+        cpu.operandx(dstb6, 0, opsize=opsize)
 
 
 def op00_51_com(cpu, inst, opsize=2):
