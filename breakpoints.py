@@ -101,9 +101,11 @@ class NthBreakpoint:
 # FOR EXAMPLE:
 #    class StepsPlusLookback(Lookback, StepsBreakpoint)
 #        pass
-
-
-class Lookback:
+#
+# ALTERNATIVELY, can be used entirely by itself, and will provide
+#  a lookback if the run() loop terminates for any reason (e.g., a HALT).
+#
+class Lookback(Breakpoint):
 
     def __init__(self, *args, lookbacks=100, **kwargs):
         self.__backstates = collections.deque([], lookbacks)
@@ -116,6 +118,7 @@ class Lookback:
     @property
     def states(self):
         return list(self.__backstates)
+
 
 
 class MultiBreakpoint(Breakpoint):
