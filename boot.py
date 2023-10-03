@@ -114,14 +114,19 @@ def boot_bin(p, fname, /, *, addr=0, deposit_only=False,
     return addr if deposit_only else None
 
 
+def make_unix_machine(loglevel='INFO'):
+    p = PDP1170(loglevel=loglevel)
+
+    p.associate_device(KW11(p.ub), 'KW')    # line clock
+    p.associate_device(KL11(p.ub), 'KL')    # console
+    p.associate_device(RPRM(p.ub), 'RP')    # disk drive
+    return p
+
+
 def boot_unix(p=None, loglevel='INFO'):
 
     if p is None:
-        p = PDP1170(loglevel='INFO')
-
-        p.associate_device(KW11(p.ub), 'KW')    # line clock
-        p.associate_device(KL11(p.ub), 'KL')    # console
-        p.associate_device(RPRM(p.ub), 'RP')    # disk drive
+        p = make_unix_machine(loglevel=loglevel)
 
         # load, and execute, the key-in bootstrap
         boot_hp(p)
