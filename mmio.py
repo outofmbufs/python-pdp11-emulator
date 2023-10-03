@@ -286,8 +286,5 @@ class MMIO:
         if value is None:
             raise ValueError("Unibus cannot read bytes")
         else:
-            self.cpu.logger.debug(
-                f"UB: byte write {oct(ioaddr)}={oct(value)}"
-                f" {self.cpu.machinestate()}")
             self.mmiomap[ioaddr >> 1](ioaddr, value, opsize=1)
             return None
