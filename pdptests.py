@@ -22,6 +22,7 @@
 
 from types import SimpleNamespace
 
+import breakpoints as BKP
 from machine import PDP1170
 from branches import BRANCH_CODES
 from pdptraps import PDPTraps
@@ -1430,6 +1431,130 @@ class TestMethods(unittest.TestCase):
         for i, val in enumerate(expected_7000):
             with self.subTest(i=i, val=val):
                 self.assertEqual(val, p.physmem[recbase + i])
+
+    def test_breakpoints1(self):
+        # test the steps=N breakpoint capability
+
+        p = self.make_pdp()
+
+        maxtest = 100
+        with ASM() as a:
+            for i in range(maxtest):
+                a.mov(i, 'r0')
+            a.clr('r0')
+            a.halt()
+
+        startaddr = 0o4000
+        self.loadphysmem(p, a, startaddr)
+
+        for i in range(maxtest):
+            with self.subTest(i=i):
+                p.run_steps(pc=startaddr, steps=i+1)
+                self.assertEqual(p.r[0], i)
+
+    def test_breakpoints2(self):
+        # test the PCBreakpoint ('run_until') breakpoint capability
+
+        p = self.make_pdp()
+
+        maxtest = 100
+        with ASM() as a:
+            for i in range(maxtest):
+                a.mov(i, 'r0')
+                a.label(f"L{i}")
+            a.clr('r0')
+            a.halt()
+
+        startaddr = 0o4000
+        self.loadphysmem(p, a, startaddr)
+
+        for i in range(maxtest):
+            with self.subTest(i=i):
+                p.run_until(pc=startaddr, stoppc=startaddr+a.getlabel(f"L{i}"))
+                self.assertEqual(p.r[0], i)
+
+    def test_breakpoints3(self):
+        # test multiple breakpoints
+        p = self.make_pdp()
+
+        maxtest = 100
+        with ASM() as a:
+            for i in range(maxtest):
+                a.mov(i+1, 'r0')
+            a.clr('r0')
+            a.halt()
+
+        startaddr = 0o4000
+        self.loadphysmem(p, a, startaddr)
+
+        # create one MultiBreakpoint with four different Steps bkpts,
+        # in this order in the MultiBreakpoint:
+        #    one at 300 steps (should not fire at all)
+        #    one at 75 steps
+        #    one at 1 step
+        #    one at 50 steps
+
+        # each of these should fire at its "absolute" step, because they
+        # are being re-used...
+
+        # create one MultiBreakpoint of PCBreakpoints at each label
+        s300 = BKP.StepsBreakpoint(steps=300)
+        s75 = BKP.StepsBreakpoint(steps=75)
+        s1 = BKP.StepsBreakpoint(steps=1)
+        s50 = BKP.StepsBreakpoint(steps=50)
+
+        mbp = BKP.MultiBreakpoint(s300, s75, s1, s50)
+
+        # this test just knows there are four of them, code the easy/dumb way:
+        p.r[p.PC] = startaddr
+        p.run(breakpoint=mbp)
+
+        # this should have fired after 1 instruction...
+        self.assertEqual(p.r[0], 1)
+
+        # the next two similar
+        p.run(breakpoint=mbp)
+        self.assertEqual(p.r[0], 50)
+        p.run(breakpoint=mbp)
+        self.assertEqual(p.r[0], 75)
+
+        # the last one will complete because of the HALT
+        p.run(breakpoint=mbp)
+        self.assertEqual(p.r[0], 0)
+
+        # this is really an internal detail, but test it as a way
+        # to make sure s1, etc all were continuing to be called
+        self.assertTrue(s1.togo < 0)
+        self.assertTrue(s50.togo < 0)
+        self.assertTrue(s75.togo < 0)
+
+    def test_lookbackbp(self):
+        # test the steps=N breakpoint capability
+
+        p = self.make_pdp()
+
+        maxtest = 100
+        with ASM() as a:
+            for i in range(maxtest):
+                a.mov(i, 'r0')
+            a.clr('r0')
+            a.halt()
+
+        startaddr = 0o4000
+        self.loadphysmem(p, a, startaddr)
+
+        class StepsLookback(BKP.Lookback, BKP.StepsBreakpoint):
+            pass
+
+        for i in range(maxtest):
+            bp = StepsLookback(steps=i+1)
+            bp7 = StepsLookback(lookbacks=7, steps=i+1)
+            with self.subTest(i=i):
+                p.run(pc=startaddr, breakpoint=bp)
+                p.run(pc=startaddr, breakpoint=bp7)
+                self.assertEqual(p.r[0], i)
+                self.assertEqual(len(bp.states), i+1)
+                self.assertEqual(len(bp7.states), min(i+1, 7))
 
     def test_ubmap(self):
         p = self.make_pdp()
