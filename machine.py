@@ -32,6 +32,7 @@ from kl11 import KL11
 from rp import RPRM
 # from rpa import RPRM_AIO as RPRM
 from kw11 import KW11
+from breakpoints import StepsBreakpoint, PCBreakpoint
 
 from op4 import op4_dispatch_table
 
@@ -493,7 +494,24 @@ class PDP11:
 
         return (val, extendedb6) if rmw else val
 
-    def run(self, *, steps=None, pc=None, stopat=None, loglevel=None):
+    # convenience, creates a breakpoint function to stop after N steps
+    def run_steps(self, steps, *args, **kwargs):
+        bpt = StepsBreakpoint(steps=steps)
+        return self.run(*args, breakpoint=bpt, **kwargs)
+
+    # convenience, creates a breakpoint to stop at the given pc,
+    # optionally limited to a specific mode (KERNEL, USER, SUPERVISOR)
+    def run_until(self, *args, stoppc, stopmode=None, **kwargs):
+        """Run processor with breakpoint at 'stopat'.
+
+        If stopat is an integer, stop at that PC value in any mode.
+        If stopat is a tuple, stop at (pc, mode) where mode
+            is self.KERNEL, self.SUPERVISOR or self.USER
+        """
+        bpt = PCBreakpoint(stoppc=stoppc, stopmode=stopmode)
+        return self.run(*args, breakpoint=bpt, **kwargs)
+
+    def run(self, *, pc=None, loglevel=None, breakpoint=None):
         """Run the machine for a number of steps (instructions).
 
         If steps is None (default), the machine runs until a HALT instruction
@@ -511,20 +529,6 @@ class PDP11:
 
         if pc is not None:
             self.r[self.PC] = pc
-
-        # Breakpoints (and step limits) are in the critical path.
-        # To keep overhead to a minimum, breakpointfunc creates a
-        # custom function to evaluate breakpoint criteria. When there
-        # are no breakpoints or step limits at all, stop_here will be None.
-        # Hence the test construction:
-        #
-        #     if stop_here and stop_here()
-        #
-        # which is as fast as it can be when there are no execution limits.
-        # When there ARE breakpoints etc, stop_here is a callable that
-        # evaluates all stop criteria and returns True if the inner loop
-        # should break.
-        stop_here = self.breakpointfunc(stopat, steps)
 
         # some shorthands for convenience
         interrupt_mgr = self.ub.intmgr
@@ -559,62 +563,13 @@ class PDP11:
             elif interrupt_mgr.pri_pending > self.psw_pri:
                 self.go_trap(interrupt_mgr.get_pending(self.psw_pri))
 
-            if stop_here and stop_here():
+            if breakpoint and breakpoint(self):
                 break
 
         # fall through to here if self.halted or a stop_here condition
         # log halts (stop_here was already logged)
         if self.halted:
             self.logger.debug(f".run HALTED: {self.machinestate()}")
-
-    def breakpointfunc(self, stopat, steps):
-        # create a custom function that returns True if execution
-        # meets the stop criteria. The returned function MUST be
-        # called EXACTLY ONCE per instruction execution.
-        #
-        # If steps is not None, then at most that many invocations can
-        # occur before execution will be halted (i.e., True returned).
-        #
-        # stopat can be a tuple: (pc, mode) or just a naked pc value.
-        # Execution will halt when the processor reaches that pc
-        # (in the given mode, or in any mode if not given).
-        #
-        # If both stopat and steps are None, then this returns None,
-        # which allows the run() loop to optimize out the check.
-
-        if stopat is None and steps is None:
-            return None
-
-        if steps is None:
-            stepsgen = itertools.count()
-        else:
-            stepsgen = range(steps-1)
-
-        try:
-            stoppc, stopmode = stopat
-        except TypeError:
-            stoppc = stopat
-            stopmode = None
-
-        def _evalstop():
-            icount = 0      # needed if steps == 1
-            for icount in stepsgen:
-
-                # this is sneaky ... it's can be handy in debugging to
-                # know the instruction count; stuff it into the cpu object
-                self.xxx_instcount = icount
-
-                if self.r[self.PC] == stoppc:
-                    if stopmode is None or self.psw_curmode == stopmode:
-                        self.logger.info(f".run: breakpt at {oct(stoppc)}")
-                        break
-                yield False
-            else:
-                self.logger.info(f".run: ran {icount+1} steps")
-            yield True
-
-        g = _evalstop()
-        return lambda: next(g)
 
     def redyellowcheck(self):
         """stack limits: possibly sets YELLOW straps, or go RED."""
@@ -1031,18 +986,23 @@ class PDP1170(PDP11):
         return s
 
     # logging/debugging convenience
-    def machinestate(self, brief=False):
-        s = self.spsw() + '; '
-        stacknames = ("KSP", "SSP", "!X!", "USP")
-        regnames = (* (f"R{i}" for i in range(6)),
-                    stacknames[self.psw_curmode], "PC")
+    def machinestate(self):
+        # machine state is arbitrarily collected into a dictionary:
+        d = {}
+        regnames = (* (f"R{i}" for i in range(6)), "SP", "PC")
         for i in range(8):
-            s += f"{regnames[i]}: {oct(self.r[i])} "
+            d[regnames[i]] = self.r[i]
+
+        d['PSW'] = self.psw
+
+        # these are redundant but convenient to have broken out
+        d['CURMODE'] = self.psw_curmode
+        d['PRI'] = self.psw_pri
 
         for m in (0, 1, 3):
-            name = stacknames[m]
-            if m == self.psw_curmode:
-                name = name[0] + "xx"
-            s += f"{name}: {oct(self.stackpointers[m])} "
+            d[("KSP", "SSP", "!X!", "USP")[m]] = self.stackpointers[m]
 
-        return s
+        for mmr in ('MMR0', 'MMR1', 'MMR2', 'MMR3'):
+            d[mmr] = getattr(self.mmu, mmr)
+
+        return d
