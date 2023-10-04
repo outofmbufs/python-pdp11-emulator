@@ -22,16 +22,11 @@
 
 
 import logging
-import itertools
 from types import SimpleNamespace
 
 from pdptraps import PDPTrap, PDPTraps
 from mmu import MemoryMgmt
 from unibus import UNIBUS, UNIBUS_1170
-from kl11 import KL11
-from rp import RPRM
-# from rpa import RPRM_AIO as RPRM
-from kw11 import KW11
 from breakpoints import StepsBreakpoint, PCBreakpoint
 
 from op4 import op4_dispatch_table
@@ -53,6 +48,26 @@ from op4 import op4_dispatch_table
 # The opcode parsing/dispatch starts with the top 4 bits of the opcode;
 # thus the names "op4" and "op4_dispatch_table". Further decoding from
 # there is as defined by the pdp11 operation code encoding tree.
+#
+# A note about octal
+#
+# Octal notation is everywhere in the world of the PDP-11; it especially
+# pervades the manuals when talking about I/O page addresses. The layout
+# of special purpose CPU registers (e.g., MMU registers and the like)
+# is often most sensical viewed as octal. This is especially true of
+# instruction format decoding, where for example the MOV instruction
+# is: 0o01<src><dst> where <src> is two octal digits (3 bits mode, 3 bits
+# register number) and so is <dst>.
+#
+# Thus MOV R2,R3 is 0o010203 ... no one wants to think of that as 0x1083
+#
+# Given that octal therefore appears all over in low-level processor detail,
+# it seems to make the most sense to just go with it, well, (almost)
+# everywhere. Thus, for example, "MASK16 = 0o177777" not "MASK16 = 0xFFFF"
+#
+# Complaints about this decision should be written on the back
+# of an eight dollar bill and deposited appropriately.
+#
 
 
 class PDP11:
@@ -1004,5 +1019,10 @@ class PDP1170(PDP11):
 
         for mmr in ('MMR0', 'MMR1', 'MMR2', 'MMR3'):
             d[mmr] = getattr(self.mmu, mmr)
+
+        try:
+            d['MMR2inst'] = self.mmu.wordRW(self.mmu.MMR2)
+        except PDPTrap as e:
+            d['MMR2inst'] = e
 
         return d

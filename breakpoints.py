@@ -120,7 +120,6 @@ class Lookback(Breakpoint):
         return list(self.__backstates)
 
 
-
 class MultiBreakpoint(Breakpoint):
     # a breakpoint that fires if any of the contained breakpoints fire
 
