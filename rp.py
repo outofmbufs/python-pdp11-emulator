@@ -66,14 +66,17 @@ class RPRM:
         TRE=0o040000,
         )
 
-    def __init__(self, ub, baseoffs=RPADDR_OFFS):
+    def __init__(self, ub, d0name='rp.disk', /, *dnames, baseoffs=RPADDR_OFFS):
         self.addr = baseoffs
         self.ub = ub
         self.logger = ub.logger
 
         self.command_history = [(0, tuple())] * 100
-        # XXX needs to be configurable somehow
-        self._diskimage = open('rp.disk', 'r+b')
+        self._diskimage = open(d0name, 'r+b')
+
+        # multiple drive support is not yet implemented
+        if dnames:
+            raise ValueError("multiple drives not yet supported in RP")
 
         for attr, offs in self.HPREG_OFFS.items():
             setattr(self, attr, 0)
