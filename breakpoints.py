@@ -57,8 +57,7 @@ class Breakpoint:
 
 class StepsBreakpoint(Breakpoint):
     def __init__(self, *args, steps, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.steps = self.togo = steps
+        self.togo = steps
 
     def __call__(self, pdp):
         self.togo -= 1
@@ -71,49 +70,35 @@ class PCBreakpoint(Breakpoint):
         self.stopmode = stopmode
 
     def __call__(self, pdp):
-        if pdp.r[pdp.PC] == self.stoppc:
-            if self.stopmode is None or pdp.psw_curmode == self.stopmode:
-                pdp.logger.info(f".run: breakpt at {oct(self.stoppc)}")
-                return True
-        return False
+        return pdp.r[pdp.PC] == self.stoppc and (
+            self.stopmode is None or pdp.psw_curmode == self.stopmode)
 
 
-# Mixin to cause the breakpoint to fire only on the Nth occurrence.
-# This must be added at the front of the subclass list
-# FOR EXAMPLE:
-#    class NthPC(NthBreakpoint, PCBreakpoint):
-#        pass
-#
-
-class NthBreakpoint:
-    def __init__(self, nth, *args, **kwargs):
+# Fire on the Nth occurrence of the given breakpoint
+class NthBreakpoint(Breakpoint):
+    def __init__(self, bp, nth, /, *args, **kwargs):
         self.__nth = self.__count = nth
-        super().__init__(*args, **kwargs)
+        self.__bp = bp
 
     def __call__(self, pdp):
-        if super().__call__(pdp):
+        if self.__bp(pdp):
             self.__count -= 1
         return self.__count == 0
 
 
-# Mixin to add state lookback to a given breakpoint.
-# This must be added at the front of the subclass list
-# FOR EXAMPLE:
-#    class StepsPlusLookback(Lookback, StepsBreakpoint)
-#        pass
-#
-# ALTERNATIVELY, can be used entirely by itself, and will provide
-#  a lookback if the run() loop terminates for any reason (e.g., a HALT).
+# Add lookback state to a given breakpoint.
+# ALTERNATIVELY, can be used entirely by itself (bp=None), and will provide
+# lookback if the run() loop terminates for any reason (e.g., a HALT).
 #
 class Lookback(Breakpoint):
 
-    def __init__(self, *args, lookbacks=100, **kwargs):
+    def __init__(self, bp=None, /, *args, lookbacks=100, **kwargs):
         self.__backstates = collections.deque([], lookbacks)
-        super().__init__(*args, **kwargs)
+        self.__bp = bp or (lambda pdp: False)
 
     def __call__(self, pdp):
         self.__backstates.append(pdp.machinestate())
-        return super().__call__(pdp)
+        return self.__bp(pdp)
 
     @property
     def states(self):
