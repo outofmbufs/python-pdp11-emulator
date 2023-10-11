@@ -99,7 +99,7 @@ def op071_div(cpu, inst):
         q, rem = divmod(dividend, divisor)
         q *= posneg
         if q > 32767 or q < -32768:
-            cpu.psw_n = 0
+            cpu.psw_n = (q < 0)
             cpu.psw_z = 0
             cpu.psw_v = 1
             cpu.psw_c = 0
