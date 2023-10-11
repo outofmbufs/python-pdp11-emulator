@@ -28,6 +28,8 @@ from branches import BRANCH_CODES
 from pdptraps import PDPTraps
 import unittest
 import random
+# from ddx import RESULTS
+import hashlib
 
 from pdpasmhelper import PDP11InstructionAssembler as ASM
 
@@ -532,6 +534,123 @@ class TestMethods(unittest.TestCase):
                 self.assertEqual(p.r[0], 17)
                 self.assertEqual(p.r[1], expected_R1)
             expected_R1 = (expected_R1 - 1) & 0o177777
+
+    def test_div(self):
+        # test the div instruction
+        # The 32-bit int in R and R|1 is divided by the src operand
+
+        p = self.make_pdp()
+
+        with ASM() as a:
+            # The test cases will be X / Y:
+            #    X : 1, 255, 4096, 10017, 32767, 32768, 32769
+            #        and then those same values with 690000 added to them
+            #    Y : -50 .. 50 but skipping 0 and using a large number
+            #
+            # The code is written this way so that the resulting ASM()
+            # is completely self-contained (does not rely on python to
+            # drive it). This made it easier to cross-verify w/SIMH
+
+            # create the test vector table
+            xvals = (1, 255, 4096, 10017, 32767, 32768, 32769)
+
+            xtable = 0o20000
+            results = 0o30000
+
+            # instead of div by zero, div by this randomish large number
+            largedivisor = 10017    # has to be 16 bits or less
+
+            a.clr(a.ptr(0o177776))
+            a.mov(xtable, 'r0')
+            for x in xvals:
+                # same data but negated
+                xneg = ((p.MASK32 + 1) - x) & p.MASK32
+
+                # same data but 690000 arbitrarily added (to make it 32bit)
+                xplus = x + 690000
+
+                # ...and negated
+                xplusneg = ((p.MASK32 + 1) - xplus) & p.MASK32
+
+                # put all of those into the dividend table
+                for v in (x, xneg, xplus, xplusneg):
+                    a.mov((v >> 16) & p.MASK16, '(r0)+')
+                    a.mov(v & p.MASK16, '(r0)+')
+
+            a.clr('(r0)+')               # sentinel
+            a.clr('(r0)')                # sentinel
+
+            # test loop. Divisor in r4. Dividend in r2/r3
+            # xval pointer in r0. Results pointer in r1
+            a.mov(results, 'r1')
+            a.mov(-50, 'r4')
+            a.label('outer')
+            a.mov(xtable, 'r0')
+            a.label('inner')
+            a.mov('(r0)+', 'r2')
+            a.mov('(r0)+', 'r3')
+            a.tst('r2')
+            a.bne('divide')
+            a.tst('r3')
+            a.bne('divide')
+
+            # hit the sentinel, bump the divisor
+            # look for the large divisor and forge a zero to get to 1
+
+            a.cmp('r4', largedivisor)
+            a.bne('bump')
+            a.clr('r4')
+
+            a.label('bump')
+            a.inc('r4')
+            a.bne('nz')
+
+            a.mov(largedivisor, 'r4')
+            a.br('outer')
+
+            a.label('nz')
+            a.cmp('r4', 50)
+            a.ble('outer')
+
+            a.mov(69, 'r0')        # this indicates success
+            a.halt()
+            a.label('divide')
+
+            # divide instruction hand-assembled
+            a.literal(0o071204)
+
+            # first save the PSW
+            a.mov(a.ptr(0o177776), '(r1)+')
+            a.mov('r2', '(r1)+')
+            a.mov('r3', '(r1)+')
+            a.br('inner')
+
+        self.loadphysmem(p, a, 0o10000)
+        p.run(pc=0o10000)
+
+        # --- this is how the above was exported for use in SIMH ---
+        # with open('div.ini', 'w') as f:
+        #     for s in a.simh(startaddr=0o10000):
+        #        f.write(s + '\n')
+        #
+        # Then that .ini file was loaded into SIMH, the program was run,
+        # and the output data was downloaded from SIMH. The results are
+        # huge, so that was sha256 hashed into this one "good" hash value.
+
+        good = ('f5e525b90728cb6fc4eecd97ad4b36c'
+                '995d2e5b8890f7c0531284615ee9958d4')
+
+        # so see if the live results hash to the same value
+        def bytify():
+            for a in range(0o30000, p.r[1], 2):
+                m = p.mmu.wordRW(a)
+                yield m & 0xFF
+                yield (m >> 8) & 0xFF
+
+        h = hashlib.sha256()
+        h.update(bytes(bytify()))
+
+        self.assertEqual(good, h.hexdigest())
 
     def test_trap(self):
         # test some traps
@@ -1405,7 +1524,7 @@ class TestMethods(unittest.TestCase):
         self.assertEqual(p.r[2], 0o66021)   # known magic iteration marker
         self.assertEqual(p.r[6], 0)         # stack should be at zero
 
-        # obtained by running machine code in SIMH
+        # these results obtained from SIMH (running same machine code)
         expected_7000 = [
             # MARKER       SP       PC     CPUERR    MARKER
             0o066000, 0o000372, 0o004052, 0o000010, 0o066000,
@@ -1529,31 +1648,47 @@ class TestMethods(unittest.TestCase):
         self.assertTrue(s75.togo < 0)
 
     def test_lookbackbp(self):
-        # test the steps=N breakpoint capability
-
         p = self.make_pdp()
 
-        maxtest = 100
+        # dynamically determine (within reason!) # of default lookbacks
+        maxguess = 5000      # if it's more than this... meh
+        curguess = 1
+        startaddr = 0o4000
+
+        while curguess < maxguess:
+            with ASM() as a:
+                for i in range(curguess):
+                    a.mov(i, 'r0')
+                a.halt()
+            self.loadphysmem(p, a, startaddr)
+            bp = BKP.Lookback()
+            p.run(pc=startaddr, breakpoint=bp)
+            # if current == first, there was 1 lookback, that's 1
+            # But also the halt instruction takes up on; hence +2
+            n = (p.r[0] - bp.states[0]['R0']) + 2
+            if n < curguess:
+                default_lookbacks = n
+                break
+            curguess += 1
+
+        maxtest = default_lookbacks + 1
         with ASM() as a:
             for i in range(maxtest):
                 a.mov(i, 'r0')
             a.clr('r0')
             a.halt()
 
-        startaddr = 0o4000
-        self.loadphysmem(p, a, startaddr)
-
-        class StepsLookback(BKP.Lookback, BKP.StepsBreakpoint):
-            pass
-
         for i in range(maxtest):
-            bp = StepsLookback(steps=i+1)
-            bp7 = StepsLookback(lookbacks=7, steps=i+1)
+            bp = BKP.Lookback(BKP.StepsBreakpoint(steps=i+1))
+            bp7 = BKP.Lookback(BKP.StepsBreakpoint(steps=i+1), lookbacks=7)
             with self.subTest(i=i):
                 p.run(pc=startaddr, breakpoint=bp)
                 p.run(pc=startaddr, breakpoint=bp7)
                 self.assertEqual(p.r[0], i)
-                self.assertEqual(len(bp.states), i+1)
+                if i+1 <= default_lookbacks:
+                    self.assertEqual(len(bp.states), i+1)
+                else:
+                    self.assertEqual(len(bp.states), default_lookbacks)
                 self.assertEqual(len(bp7.states), min(i+1, 7))
 
     def test_ubmap(self):
