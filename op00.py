@@ -229,7 +229,13 @@ def op00_63_asl(cpu, inst, opsize=2):
 
 
 def op00_64_mark(cpu, inst):
-    raise ValueError
+    # this instruction is... what it is. Note: if I/D separation
+    # is enabled, the stack must be in BOTH D and I space, as control
+    # will be transfered to the stack (typically) for this instruction.
+    nn = inst & 0o77
+    cpu.r[cpu.SP] = (cpu.r[cpu.PC] + (2 * nn)) & cpu.MASK16
+    cpu.r[cpu.PC] = cpu.r[5]
+    cpu.r[5] = cpu.stackpop()
 
 
 def op00_65_mfpi(cpu, inst, opsize=2):
@@ -243,7 +249,7 @@ def op00_65_mfpi(cpu, inst, opsize=2):
 
     # There are some wonky special semantics. In user mode if prevmode
     # is USER (which it always is in Unix) then this refers to DSPACE
-    # (despite the MFPI name) protect the notion of "execute only" I space
+    # (despite the MFPI name) to protect the notion of "execute only" I space
 
     prvm = cpu.psw_prevmode
     curm = cpu.psw_curmode
