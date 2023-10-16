@@ -123,6 +123,15 @@ class PDP11:
     # sure what that really is but this is as good a place for it as any
     LOGGING_OFFS = 0o17000
 
+    # Lower Size Register (memory size)
+    LOWERSIZE_OFFS = 0o17760
+
+    # Upper Size Register (memory size) ... ALWAYS ZERO
+    UPPERSIZE_OFFS = 0o17762
+
+    # System ID register
+    SYSTEMID_OFFS = 0o17764
+
     # the CPU error register and some useful bit values
     CPUERROR_OFFS = 0o17766
 
@@ -217,6 +226,11 @@ class PDP11:
         # default physical memory is 256K WORDS (512KB)
         self.physmem = physmem or ([0] * (256*1024))
 
+        # >>5 because len gives words not bytes, and -1 because manual says:
+        #     defined to indicate the last addressable block of 32 words in
+        #     memory (bit 0 is equivalent to bit 6 of the Physical Address).
+        self.lowersize = (len(self.physmem) >> 5) - 1
+
         # The 16-bit view of the PSW is synthesized when read; the
         # essential parts of it are split out internally like this:
         self.psw_curmode = self.KERNEL
@@ -233,6 +247,9 @@ class PDP11:
         for attrname, offs in (('psw', self.PS_OFFS),
                                ('stack_limit_register', self.STACKLIM_OFFS),
                                ('swleds', self.SWLEDS_OFFS),
+                               ('lowersize', self.LOWERSIZE_OFFS),
+                               ('uppersize', self.UPPERSIZE_OFFS),
+                               ('systemID', self.SYSTEMID_OFFS),
                                ('error_register', self.CPUERROR_OFFS),
                                ('logging_hack', self.LOGGING_OFFS)):
             self.ub.mmio.register_simpleattr(self, attrname, offs)
