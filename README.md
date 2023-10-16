@@ -76,11 +76,8 @@ I apologize for the hp/rp confusion. Perhaps I will clean this up in a future re
 
 You will see a single user shell prompt at this point if you are lucky!
 
-You have one more important thing to do before you go multi-user. No DL-11 devices are emulated, but the /etc/ttys file tells init to open some if you go multi-user. You must edit (with "ed" !!) the /etc/ttys file and disable the getty entires for everything except the console device. If you don't know what any of this means, you aren't going to get very far...
+Exit the single user shell (type a control-D) to get into multi-user mode. NOTE: The UNIX /etc/ttys file defaults to enabling four additional login lines but the emulation that is implemented (see dl11.py) simply makes them appear to the kernel as "no terminal connected". The (emulated) console is the only serial device supported so far.
 
-If you don't disable the non-existing device opens, the kernel crashes when /etc/init tries to open them.
-
-Disable logins on the non-existent ttys and then go for multi-user mode.
 
 Enjoy!
 
