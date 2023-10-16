@@ -114,22 +114,19 @@ def boot_bin(p, fname, /, *, addr=0, deposit_only=False,
     return addr if deposit_only else None
 
 
-def make_unix_machine(loglevel='INFO'):
+def make_unix_machine(*, loglevel='INFO', drivenames=[]):
     p = PDP1170(loglevel=loglevel)
 
     p.associate_device(KW11(p.ub), 'KW')    # line clock
     p.associate_device(KL11(p.ub), 'KL')    # console
-    p.associate_device(RPRM(p.ub), 'RP')    # disk drive
+    p.associate_device(RPRM(p.ub, *drivenames), 'RP')    # disk drive
     return p
 
 
-def boot_unix(p=None, loglevel='INFO'):
+def boot_unix(p):
 
-    if p is None:
-        p = make_unix_machine(loglevel=loglevel)
-
-        # load, and execute, the key-in bootstrap
-        boot_hp(p)
+    # load, and execute, the key-in bootstrap
+    boot_hp(p)
 
     print("Starting PDP11; this window is NOT THE EMULATED PDP-11 CONSOLE.")
     print("*** In another window, telnet/nc to localhost:1170 to connect.")
@@ -153,9 +150,12 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--debug', action='store_true')
+    parser.add_argument('--drive', action='append', default=[], dest='drives')
     args = parser.parse_args()
 
+    pdpoptions = {'drivenames': args.drives}
     if args.debug:
-        boot_unix(loglevel='DEBUG')
-    else:
-        boot_unix()
+        pdpoptions['loglevel'] = 'DEBUG'
+
+    p = make_unix_machine(**pdpoptions)
+    boot_unix(p)
