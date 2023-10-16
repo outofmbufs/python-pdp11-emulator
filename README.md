@@ -76,7 +76,7 @@ I apologize for the hp/rp confusion. Perhaps I will clean this up in a future re
 
 You will see a single user shell prompt at this point if you are lucky!
 
-Exit the single user shell (type a control-D) to get into multi-user mode. NOTE: The UNIX /etc/ttys file defaults to enabling four additional login lines but the emulation that is implemented (see dl11.py) simply makes them appear to the kernel as "no terminal connected". The (emulated) console is the only serial device supported so far.
+Exit the single user shell (type a control-D) to get into multi-user mode. NOTE: The UNIX /etc/ttys file defaults to enabling four additional login lines but the emulation that is implemented (see dc11.py) simply makes them appear to the kernel as "no terminal connected". The (emulated) console is the only serial device supported so far.
 
 
 Enjoy!
