@@ -116,6 +116,10 @@ def op000_dispatcher(cpu, inst):
                 op_rtt(cpu, inst)
             elif inst == 1:
                 op_wait(cpu, inst)
+            elif inst == 3:
+                raise PDPTraps.BPT
+            elif inst == 4:
+                raise PDPTraps.IOT
             elif inst == 5:
                 op_reset(cpu, inst)
 
