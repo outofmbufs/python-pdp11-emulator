@@ -2,6 +2,7 @@ import time
 from machine import PDP1170
 from kw11 import KW11
 from kl11 import KL11
+from dc11 import DC11
 from rp import RPRM
 
 
@@ -120,6 +121,7 @@ def make_unix_machine(*, loglevel='INFO', drivenames=[]):
     p.associate_device(KW11(p.ub), 'KW')    # line clock
     p.associate_device(KL11(p.ub), 'KL')    # console
     p.associate_device(RPRM(p.ub, *drivenames), 'RP')    # disk drive
+    p.associate_device(DC11(p.ub), 'DC')    # additional serial poirts
     return p
 
 
