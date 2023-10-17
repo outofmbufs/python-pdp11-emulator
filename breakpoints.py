@@ -32,10 +32,17 @@ import collections
 # nothing fancier than that could be specified.
 #
 # However, this generalization now allows arbitrary breakpoint processing.
+# The run() method will call a breakpoint after each instruction and
+# pass in the machine object plus information, 'XInfo', containing
+# important internal execution state of the machine:
+
+XInfo = collections.namedtuple('XInfo', ['PC', 'instruction'])
+
+# The Breakpoint object can use that information to cause a breakpoint.
 # Custom Breakpoint objects can contain state, and anything that can
 # be implemented as a per-instruction-boundary test is now possible.
 # The breakpoint objects can also store logs of relevant state information
-# (see, for example, the Lookback mixin).
+# (see, for example, Lookback).
 #
 # CAUTION regarding breakpoint state data and object re-use.  If a
 # breakpoint object is created once but supplied to multiple pdp.run()
@@ -51,7 +58,7 @@ import collections
 
 class Breakpoint:
     # the base Breakpoint class: a null breakpoint that never fires
-    def __call__(self, pdp):
+    def __call__(self, pdp, xinfo):
         return False
 
 
@@ -59,7 +66,7 @@ class StepsBreakpoint(Breakpoint):
     def __init__(self, *args, steps, **kwargs):
         self.togo = steps
 
-    def __call__(self, pdp):
+    def __call__(self, pdp, xinfo):
         self.togo -= 1
         return self.togo == 0
 
@@ -67,11 +74,13 @@ class StepsBreakpoint(Breakpoint):
 class PCBreakpoint(Breakpoint):
     def __init__(self, *, stoppc, stopmode=None):
         self.stoppc = stoppc
-        self.stopmode = stopmode
+        self.stopmf = lambda m: (stopmode is None) or (m == stopmode)
 
-    def __call__(self, pdp):
-        return pdp.r[pdp.PC] == self.stoppc and (
-            self.stopmode is None or pdp.psw_curmode == self.stopmode)
+    def __call__(self, pdp, xinfo):
+        # NOTE: xinfo.PC is the PC of the instruction just completed,
+        #       whereas pdp.r[pdp.PC] is the PC of the next instruction
+        #       to be executed.
+        return pdp.r[pdp.PC] == self.stoppc and self.stopmf(pdp.psw_curmode)
 
 
 # Fire on the Nth occurrence of the given breakpoint
@@ -80,8 +89,8 @@ class NthBreakpoint(Breakpoint):
         self.__nth = self.__count = nth
         self.__bp = bp
 
-    def __call__(self, pdp):
-        if self.__bp(pdp):
+    def __call__(self, pdp, xinfo):
+        if self.__bp(pdp, xinfo):
             self.__count -= 1
         return self.__count == 0
 
@@ -94,11 +103,11 @@ class Lookback(Breakpoint):
 
     def __init__(self, bp=None, /, *args, lookbacks=100, **kwargs):
         self.__backstates = collections.deque([], lookbacks)
-        self.__bp = bp or (lambda pdp: False)
+        self.__bp = bp or (lambda pdp, xinfo: False)
 
-    def __call__(self, pdp):
-        self.__backstates.append(pdp.machinestate())
-        return self.__bp(pdp)
+    def __call__(self, pdp, xinfo):
+        self.__backstates.append((xinfo, pdp.machinestate()))
+        return self.__bp(pdp, xinfo)
 
     @property
     def states(self):
@@ -112,11 +121,36 @@ class MultiBreakpoint(Breakpoint):
         self.testall = testall
         self.bkpts = [bp0] + list(bps)
 
-    def __call__(self, pdp):
+    def __call__(self, pdp, xinfo):
         stophere = False
         for bp in self.bkpts:
-            if bp(pdp):
+            if bp(pdp, xinfo):
                 stophere = True
                 if not self.testall:
                     break
         return stophere
+
+
+# Add instruction logging to a given breakpoint.
+# To use: create the underlying breakpoint and then pass it into this:
+#      bp = Logger(SomeOtherBreakpoint(other-args))
+#
+# If used with no underlying breakpoint, just logs instructions.
+#      bp = Logger()
+#
+class Logger(Breakpoint):
+
+    def __init__(self, bp=None, /, *, logger=None):
+        self.__bp = bp or (lambda pdp, info: False)
+        self.__logger = logger
+
+    def __call__(self, pdp, xinfo):
+        if self.__logger is None:
+            self.__logger = pdp.logger
+
+        m_s = "KS!U"[pdp.psw_curmode]
+        pc_s = oct(xinfo.PC)
+        inst = xinfo.instruction
+        inst_s = "None" if inst is None else oct(inst)
+        self.__logger.debug(f"{pc_s}/{m_s} :: {inst_s}")
+        return self.__bp(pdp, xinfo)
