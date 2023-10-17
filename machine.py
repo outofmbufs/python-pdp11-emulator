@@ -27,7 +27,7 @@ from types import SimpleNamespace
 from pdptraps import PDPTrap, PDPTraps
 from mmu import MemoryMgmt
 from unibus import UNIBUS, UNIBUS_1170
-from breakpoints import StepsBreakpoint, PCBreakpoint
+from breakpoints import StepsBreakpoint, PCBreakpoint, XInfo
 
 from op4 import op4_dispatch_table
 
@@ -185,8 +185,7 @@ class PDP11:
     def __init__(self, *,
                  physmem=None,     # default will be 512KB
                  unibus=None,      # subclasses may want to supply variant
-                 logger="pdp11", loglevel='INFO',
-                 instlog=False, pswlog=False):
+                 logger="pdp11", loglevel='WARNING'):
 
         # logging is enabled by default and will go to
         # a file logger + ".log" (i.e., "pdp11.log" by default).
@@ -214,11 +213,6 @@ class PDP11:
 
         self.logger.info(f"{self.__class__.__name__} started;"
                          f" Logging level={logging.getLevelName(loglevel)}.")
-        # instruction logging and/or PSW logging - HUGE LOGS but
-        # sometimes helpful.  Often the best way to use this is to insert
-        # custom code into the run loop to trigger these as desired.
-        self.instlog = instlog
-        self.pswlog = pswlog
 
         self.ub = unibus(self) if unibus else UNIBUS(self)
         self.mmu = MemoryMgmt(self)
@@ -543,7 +537,7 @@ class PDP11:
         bpt = PCBreakpoint(stoppc=stoppc, stopmode=stopmode)
         return self.run(*args, breakpoint=bpt, **kwargs)
 
-    def run(self, *, pc=None, loglevel=None, breakpoint=None):
+    def run(self, *, pc=None, breakpoint=None):
         """Run the machine for a number of steps (instructions).
 
         If steps is None (default), the machine runs until a HALT instruction
@@ -553,11 +547,11 @@ class PDP11:
 
         If pc is None (default) execution begins at the current pc; otherwise
         the pc is set to the given value first.
-        """
 
-        if loglevel is not None:
-            loglevel = logging.getLevelNamesMapping().get(loglevel, loglevel)
-            self.logger.setLevel(loglevel)
+        If breakpoint is not None (default), it is expected to be a callable.
+        It will be invoked after every instruction and if it returns True
+        then a breakpoint will occur (the run() method returns).
+        """
 
         if pc is not None:
             self.r[self.PC] = pc
@@ -570,7 +564,7 @@ class PDP11:
         self.halted = False
 
         # NOTE WELL: everything in this loop is per-instruction overhead
-        while not self.halted:      # stop_here function will also break
+        while not self.halted:
 
             # SUBTLETY: Trap handlers expect the PC to be 2 beyond the
             #    instruction causing the trap. Hence "+2 then execute"
@@ -579,11 +573,10 @@ class PDP11:
 
             mmu.MMR1_staged = 0     # see discussion in go_trap
             mmu.MMR2 = thisPC       # per handbook
+            inst = None             # so bkpt can know if wordRW faulted
 
             try:
                 inst = mmu.wordRW(thisPC)
-                if self.instlog:
-                    self.instlogging(inst, thisPC)
                 op4_dispatch_table[inst >> 12](self, inst)
             except PDPTrap as trap:
                 abort_trap = trap
@@ -595,13 +588,15 @@ class PDP11:
             elif interrupt_mgr.pri_pending > self.psw_pri:
                 self.go_trap(interrupt_mgr.get_pending(self.psw_pri))
 
-            if breakpoint and breakpoint(self):
+            if breakpoint and breakpoint(self, XInfo(thisPC, inst)):
                 break
 
-        # fall through to here if self.halted or a stop_here condition
-        # log halts (stop_here was already logged)
+        # fall through to here if self.halted or breakpoont
         if self.halted:
-            self.logger.debug(f".run HALTED: {self.machinestate()}")
+            reason = ".run -- HALTED: {}"
+        else:
+            reason = ".run -- breakpoint: {}"
+        self.logger.info(reason.format(self.machinestate()))
 
     def redyellowcheck(self):
         """stack limits: possibly sets YELLOW straps, or go RED."""
@@ -725,17 +720,6 @@ class PDP11:
 
         # alrighty then, can finally jump to the PC from the vector
         self.r[self.PC] = newpc
-
-    # This is called when the run loop wants to log an instruction.
-    # Pulled out so can be overridden for specific debugging sceanrios.
-    def instlogging(self, inst, pc):
-        try:
-            logit = self.instlog(self, inst, pc)
-        except TypeError:
-            logit = True
-        if logit:
-            m = "KS!U"[self.psw_curmode]
-            self.logger.debug(f"{oct(pc)}/{m} :: {oct(inst)}")
 
     @property
     def swleds(self):
@@ -962,10 +946,6 @@ class PDP1170(PDP11):
         self.psw_regset = (value >> 11) & 1
 
         newpri = (value >> 5) & 7
-        if self.pswlog and newpri != self.psw_pri:
-            self.logger.debug(f"PSW pri change: {self.spsw()} -> "
-                              f"{self.spsw(value)}")
-
         self.psw_pri = newpri
 
         self.psw_trap = (value >> 4) & 1
