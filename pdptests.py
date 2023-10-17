@@ -28,7 +28,7 @@ from branches import BRANCH_CODES
 from pdptraps import PDPTraps
 import unittest
 import random
-# from ddx import RESULTS
+import os
 import hashlib
 
 from pdpasmhelper import PDP11InstructionAssembler as ASM
@@ -36,7 +36,7 @@ from pdpasmhelper import PDP11InstructionAssembler as ASM
 
 class TestMethods(unittest.TestCase):
 
-    PDPLOGLEVEL = 'INFO'
+    PDPLOGLEVEL = 'WARNING'
 
     # used to create various instances, collects all the options
     # detail into this one place... mostly this is about loglevel
@@ -551,14 +551,22 @@ class TestMethods(unittest.TestCase):
             # is completely self-contained (does not rely on python to
             # drive it). This made it easier to cross-verify w/SIMH
 
-            # create the test vector table
+            # As described above: X test values.
+            #   *** SHA256 NOTE: DO NOT CHANGE THESE TEST VALUES.
+            #       THE TEST RELIES ON A PRECOMPUTED SHA256 HASH BASED
+            #       ON RESULTS FROM THESE VALUES
             xvals = (1, 255, 4096, 10017, 32767, 32768, 32769)
 
-            xtable = 0o20000
-            results = 0o30000
+            xtable = 0o20000       # address for storing the above
+            results = 0o30000      # address for storing results list
 
             # instead of div by zero, div by this randomish large number
+            #   *** DO NOT CHANGE; see sha256 note above
             largedivisor = 10017    # has to be 16 bits or less
+
+            # The divisor will run from -this to this.
+            #   *** DO NOT CHANGE; see sha256 note above
+            divisorrange = 50
 
             a.clr(a.ptr(0o177776))
             a.mov(xtable, 'r0')
@@ -583,7 +591,7 @@ class TestMethods(unittest.TestCase):
             # test loop. Divisor in r4. Dividend in r2/r3
             # xval pointer in r0. Results pointer in r1
             a.mov(results, 'r1')
-            a.mov(-50, 'r4')
+            a.mov(-divisorrange, 'r4')
             a.label('outer')
             a.mov(xtable, 'r0')
             a.label('inner')
@@ -609,7 +617,7 @@ class TestMethods(unittest.TestCase):
             a.br('outer')
 
             a.label('nz')
-            a.cmp('r4', 50)
+            a.cmp('r4', divisorrange)
             a.ble('outer')
 
             a.mov(69, 'r0')        # this indicates success
@@ -1647,6 +1655,55 @@ class TestMethods(unittest.TestCase):
         self.assertTrue(s50.togo < 0)
         self.assertTrue(s75.togo < 0)
 
+    def test_bkplog(self):
+        # test the instruction logger "breakpoint"
+
+        fnamebase = f"pdptestlog-{hex(id(object()))}"
+        fname = fnamebase + ".log"
+
+        try:
+            os.remove(fname)
+        except FileNotFoundError:
+            pass
+
+        p = PDP1170(logger=fnamebase, loglevel='DEBUG')
+        # the point of this program is just to create N log
+        # entries (when executed) that can be verified
+        with ASM() as a:
+            a.mov('r0', 'r0')
+            a.mov('r0', 'r1')
+            a.mov('r0', 'r2')
+            a.mov('r0', 'r3')
+            a.mov('r0', 'r4')
+            a.mov('r0', 'r5')
+            a.mov('r1', 'r0')
+            a.mov('r1', 'r1')
+            a.mov('r1', 'r2')
+            a.mov('r1', 'r3')
+            a.mov('r1', 'r4')
+            a.mov('r1', 'r5')
+            a.halt()
+
+        instloc = 0o4000
+        self.loadphysmem(p, a, instloc)
+        p.run(pc=instloc, breakpoint=BKP.Logger())
+
+        # This is a probably-too-fragile attempt to see if each of the above
+        # instructions made it into the logfile, in order. While trying to
+        # accommodate possibility of other logging lines getting in there.
+        # There was, of course, a better way, but this worked...
+        with open(fname, 'r') as logf:
+            raninto_EOF = False
+            for inst in a:
+                try:
+                    while f":: {oct(inst)}" not in next(logf):
+                        pass
+                except StopIteration:
+                    raninto_EOF = True
+            self.assertFalse(raninto_EOF)
+
+        os.remove(fname)
+
     def test_lookbackbp(self):
         p = self.make_pdp()
 
@@ -1665,7 +1722,7 @@ class TestMethods(unittest.TestCase):
             p.run(pc=startaddr, breakpoint=bp)
             # if current == first, there was 1 lookback, that's 1
             # But also the halt instruction takes up on; hence +2
-            n = (p.r[0] - bp.states[0]['R0']) + 2
+            n = (p.r[0] - bp.states[0][1]['R0']) + 2
             if n < curguess:
                 default_lookbacks = n
                 break
@@ -1690,6 +1747,17 @@ class TestMethods(unittest.TestCase):
                 else:
                     self.assertEqual(len(bp.states), default_lookbacks)
                 self.assertEqual(len(bp7.states), min(i+1, 7))
+
+    def test_jsrco(self):
+        """Another special case of the JSR instruction is JSR
+        PC, @(SP) + which exchanges the top element of
+        the processor stack and the contents of the program
+        counter. Use of this instruction allows two
+        routines to swap program control and resume operation
+        when recalled where they left off. Such routines
+        are called 'co-routines.'
+        """
+        pass
 
     def test_ubmap(self):
         p = self.make_pdp()
@@ -1799,7 +1867,7 @@ if __name__ == "__main__":
         inst = args.instruction
         p, pc = t.speed_test_setup(loopcount=20, inst=inst, mmu=mmu)
         ta = timeit.repeat(stmt='t.speed_test_run(p, pc)',
-                           number=1000, globals=globals(), repeat=10)
+                           number=1000, globals=globals(), repeat=50)
         tnsec = round(1000 * min(*ta), 1)
         if args.instruction == movr1r0:
             instr = 'MOV R1,R0'
