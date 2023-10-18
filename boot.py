@@ -5,6 +5,8 @@ from kl11 import KL11
 from dc11 import DC11
 from rp import RPRM
 
+import breakpoints
+
 
 def boot_hp(p, /, *, addr=0o10000, deposit_only=False):
     """Deposit, then run, instructions to read first 1KB of drive 0 --> addr.
@@ -125,7 +127,7 @@ def make_unix_machine(*, loglevel='INFO', drivenames=[]):
     return p
 
 
-def boot_unix(p):
+def boot_unix(p, runoptions={}):
 
     # load, and execute, the key-in bootstrap
     boot_hp(p)
@@ -139,7 +141,7 @@ def boot_unix(p):
     print("")
     print("Then, at the ':' prompt, typically type: hp(0,0)unix")
 
-    p.run(pc=0)
+    p.run(pc=0, **runoptions)
 
 
 # USE:
@@ -153,11 +155,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--drive', action='append', default=[], dest='drives')
+    parser.add_argument('--instlog', action='store_true')
     args = parser.parse_args()
 
     pdpoptions = {'drivenames': args.drives}
+    runoptions = {}
     if args.debug:
         pdpoptions['loglevel'] = 'DEBUG'
+    if args.instlog:
+        runoptions['breakpoint'] = breakpoints.Logger()
 
     p = make_unix_machine(**pdpoptions)
-    boot_unix(p)
+
+    boot_unix(p, runoptions=runoptions)
