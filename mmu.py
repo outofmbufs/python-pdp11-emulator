@@ -258,9 +258,15 @@ class MemoryMgmt:
             if self._22bit:
                 self.iopage_base |= (15 << 18)  # ... and 4 more
 
-    def v2p(self, vaddr, mode, space, reading):
+    def v2p(self, vaddr, mode, space, reading, *, invis=False):
         """Convert a 16-bit virtual address to physical.
-        NOTE: Raises traps, updates A/W bits, & sets straps as needed.
+
+        invis=True when being used for logging or other examinations that
+              should not alter any machine state, including MMU state.
+
+        NOTE: raises PDPTraps.MMU for untranslatable addresses
+        NOTE: If not invis, updates A/W bits & sets straps as needed.
+                * Raises traps, updates A/W bits, & sets straps as needed.
         NOTE: 'reading' MUST be True or False, not anything else.
         """
 
@@ -332,15 +338,15 @@ class MemoryMgmt:
         #   handler modifies the APR to disable the management trap then
         #   of course future lookups will be eligible for the cache then.
 
-        straps = self._v2p_accesschecks(pdr, vaddr, xkey)
+        straps = self._v2p_accesschecks(pdr, vaddr, xkey, invis)
 
         # the actual translation...
         bn = (vaddr >> 6) & 0o177
         plf = (pdr >> 8) & 0o177
         if (pdr & 0o10) and bn < plf:
-            self._raisetrap(self.MMR0_BITS.ABORT_PLENGTH, vaddr, xkey)
+            self._raisetrap(self.MMR0_BITS.ABORT_PLENGTH, vaddr, xkey, invis)
         elif (pdr & 0o10) == 0 and bn > plf:
-            self._raisetrap(self.MMR0_BITS.ABORT_PLENGTH, vaddr, xkey)
+            self._raisetrap(self.MMR0_BITS.ABORT_PLENGTH, vaddr, xkey, invis)
 
         # "Attention" (not "Access") and "Written" bits updates.
         # The W bit is indeed a "memory was written" bit.
@@ -352,21 +358,20 @@ class MemoryMgmt:
         # there are no further A/W bit updates to worry about (so they
         # can be cached at that point).
 
-        W_update = 0o000 if reading else 0o100
-        A_update = 0o200 if straps else 0o000
+        if not invis:
+            self.cpu.straps |= straps
+            W_update = 0o000 if reading else 0o100
+            A_update = 0o200 if straps else 0o000
+            AW_update = (W_update | A_update)
 
-        AW_update = (W_update | A_update)
-
-        if (pdr & AW_update) != AW_update:
-            self._putapr(xkey, (par, pdr | AW_update))
+            if (pdr & AW_update) != AW_update:
+                self._putapr(xkey, (par, pdr | AW_update))
 
         dib = vaddr & 0o77
         pa = ((par + bn) << 6) | dib
 
-        self.cpu.straps |= straps
-
         # only non-trapping can be cached
-        if straps == 0:
+        if straps == 0 and not invis:
             self._encache(tuplexkey, pdr, pa - vaddr)
         return pa
 
@@ -412,7 +417,7 @@ class MemoryMgmt:
         foldednth = (xkey.mode * 2) + self._foldspaces(xkey.mode, xkey.space)
         self.APR[foldednth][xkey.segno] = list(apr)
 
-    def _v2p_accesschecks(self, pdr, vaddr, xkey):
+    def _v2p_accesschecks(self, pdr, vaddr, xkey, invis):
         """Raise traps or set post-instruction traps as appropriate.
 
         Returns straps flags (if any required).
@@ -454,14 +459,15 @@ class MemoryMgmt:
                                       f"{list(map(oct, self.cpu.r))}"
                                       f", {oct(self.cpu.psw)}"
                                       f", PDR={oct(pdr)} {reading=}")
-                self._raisetrap(self.MMR0_BITS.ABORT_NR, vaddr, xkey)
+                self._raisetrap(self.MMR0_BITS.ABORT_NR, vaddr, xkey, invis)
 
             # control mode 1 is an abort if writing, mgmt trap if read
             case 1 if reading:
                 straps = self.cpu.STRAPBITS.MEMMGT
 
             case 1 | 2 if not reading:
-                self._raisetrap(self.MMR0_BITS.ABORT_RDONLY, vaddr, xkey)
+                self._raisetrap(
+                    self.MMR0_BITS.ABORT_RDONLY, vaddr, xkey, invis)
 
             # control mode 4 is mgmt trap on any access (read or write)
             case 4:
@@ -473,14 +479,15 @@ class MemoryMgmt:
 
         return straps
 
-    def wordRW(self, vaddr, value=None, /, *, mode=None, space=ISPACE):
+    def wordRW(self, vaddr, value=None, /, *,
+               mode=None, space=ISPACE, _invis=False):
         """Read/write a word at virtual address vaddr.
 
         If value is None, perform a read and return a 16-bit value
         If value is not None, perform a write; return None.
         """
 
-        pa = self.v2p(vaddr, mode, space, value is None)
+        pa = self.v2p(vaddr, mode, space, value is None, invis=_invis)
         if pa >= self.iopage_base:
             return self.ub.mmio.wordRW(pa & self.cpu.IOPAGE_MASK, value)
         else:
@@ -544,17 +551,25 @@ class MemoryMgmt:
                 self.cpu.physRW(pa & ~1, wv)
             return None
 
+    # because faults will change MMR registers and CPUERR... this exists
+    # so debugging/logging tools (e.g., machinestate()) can access
+    # memory without disturbing MMU/cpu state if a fault is caused.
+    def _invisread(self, a):
+        """For debugging; read invisibly w/out modifying any MMU/CPU state."""
+        return self.wordRW(a, _invis=True)
+
     def wordRW_KD(self, a, v=None, /):
         """Convenienence; version of wordRW for kernel/dspace."""
         return self.wordRW(a, v, mode=self.cpu.KERNEL, space=self.DSPACE)
 
-    def _raisetrap(self, trapflag, vaddr, xkey):
+    def _raisetrap(self, trapflag, vaddr, xkey, invis):
         """Raise an MMU trap. Commits regmods and updates reason in MMR0."""
-        self._MMR1commit()
-        self.MMR0 |= (trapflag |
-                      xkey.segno << 1 |     # bits <3:1>
-                      xkey.space << 4 |     # bit 4
-                      xkey.mode << 5)       # bits <6:5>
+        if not invis:
+            self._MMR1commit()
+            self.MMR0 |= (trapflag |
+                          xkey.segno << 1 |     # bits <3:1>
+                          xkey.space << 4 |     # bit 4
+                          xkey.mode << 5)       # bits <6:5>
 
         # XXX gotta figure out how to set this for Odd Addresses and
         # T bit conditions, but otherwise Bit 7 is not set. From handbook:
