@@ -158,7 +158,16 @@ class PDP11InstructionAssembler:
             b6 = self.B6MODES['(' + s[1]]
         except KeyError:
             raise cannotparse from None
+
         return [mode | (b6 & 0o07), idxval]
+
+    def register_parser(self, operand_token, /):
+        """Like operand_parser but token MUST be register direct."""
+        seq = self.operand_parser(operand_token)
+        if len(seq) > 1 or seq[0] > 0o07:
+            raise ValueError(f"{operand_token} must be register-direct")
+
+        return seq[0]
 
     # gets overridden in InstructionBlock to track generated instructions
     def _seqwords(self, seq):
@@ -180,6 +189,11 @@ class PDP11InstructionAssembler:
         else:
             dst6, *dst_i = self.operand_parser(dst)
             return self._seqwords([operation | dst6, *dst_i])
+
+    # some instructions only operate on registers not fully-general operands
+    def _regdirect(self, operation, regspec):
+        regnum = self.register_parser(regspec)
+        return self._seqwords([operation | regnum])
 
     # XXX the instructions are not complete, this is being developed
     #     as needed for pdptests.py
@@ -209,11 +223,20 @@ class PDP11InstructionAssembler:
     def sub(self, src, dst):
         return self._2op(0o160000, src, dst)
 
+    # note: gets overridden in InstructionBlock to add label support
     def jmp(self, dst):
         return self._1op(0o000100, dst)
 
+    # note: gets overridden in InstructionBlock to add label support
     def br(self, offs):
         return self.literal(0o000400 | (offs & 0o377))
+
+    # note: gets overridden i nInstructionBlock to add label support
+    def jsr(self, reg, dst):
+        return self._1op(0o004000 | (self.register_parser(reg) << 6), dst)
+
+    def rts(self, reg):
+        return self.literal(0o000200 | self.register_parser(reg))
 
     def clr(self, dst):
         return self._1op(0o005000, dst)
@@ -230,20 +253,24 @@ class PDP11InstructionAssembler:
     def swab(self, dst):
         return self._1op(0o000300, dst)
 
+    def asl(self, dst):
+        return self._1op(0o006300, dst)
+
+    def asrb(self, dst):
+        return self._1op(0o106000, dst)
+
     def ash(self, cnt, dst):
-        try:
-            return self.literal(0o072000 | dst << 6, cnt)
-        except TypeError:
-            dstb6, *dst_i = self.operand_parser(dst)
-            if dstb6 & 0o70:
-                raise ValueError("ash dst must be register direct")
-            return self.literal(0o072000 | dstb6 << 6, cnt)
+        dstreg = self.register_parser(dst)
+        return self.literal(0o072000 | dstreg << 6, cnt)
 
     def halt(self):
         return self.literal(0)
 
     def rtt(self):
         return self.literal(6)
+
+    def rti(self):
+        return self.literal(2)
 
     def mtpi(self, dst):
         return self._1op(0o006600, dst)
@@ -289,6 +316,15 @@ class FwdRef:
 
     def transform(self):
         return self.block.getlabel(self.name) - (2 * self.loc)
+
+
+class JumpTarget(FwdRef):
+    # when a label is used as a PC-relative offset in a Jump (or JSR)
+    # target, the PC is already advanced according to where the literal of
+    # forward reference occurs in the stream. This has to be adjusted for.
+    def transform(self):
+        return self.block._neg16(
+            self.block.getlabel(self.name) - (2 * (self.loc + 2)))
 
 
 class BranchTarget(FwdRef):
@@ -347,6 +383,19 @@ class BranchTarget(FwdRef):
 #       raises a ValueError. This can be suppressed (usually only useful
 #       for debugging) by requesting a._instructions()
 #
+#
+# NOTE: The "with" construct is just notationally convenient; nothing
+#       happens in context exit and the instruction block continues to
+#       be valid afterwards. This:
+#           with ASM() as a:
+#              a.mov('r1', 'r2')
+#
+#       is completely equivalent to:
+#
+#           a = InstructionBlock()
+#           a.mov('r1', 'r2')
+#
+
 
 class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
     def __init__(self):
@@ -356,11 +405,7 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         self._fwdrefs = defaultdict(list)
 
     def _seqwords(self, seq):
-        """seq can be an iterable, or a naked (integer) instruction."""
-        try:
-            self._instblock += seq
-        except TypeError:
-            self._instblock += [seq]
+        self._instblock += seq
         return seq
 
     # Extend base operand_parser with ability to handle labels,
@@ -444,6 +489,8 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
     def getlabel(self, name, *, fwdfactory=FwdRef):
         """Return value (loc) of name, which may be a FwdRef object.
 
+        Label values are offsets relative to the start of the block.
+
         If the label is a forward reference, the fwdfactory argument
         (default=FwdRef) will be used to create a FwdRef object placed
         into the instruction stream until resolved later. The default FwdRef
@@ -451,7 +498,8 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         instructions supply FwdRef subclasses via fwdfactory for customized
         encoding/processing of resolved references.
 
-        If fwdfactory is None, forward references raise a TypeError
+        If fwdfactory is passed in as None (default is FwdRef),
+        forward references raise a TypeError
         """
         try:
             return self._labels[name]
@@ -513,6 +561,40 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         branchxx.__name__ = _bname
         setattr(PDP11InstructionAssembler, _bname, branchxx)
     del _bname, _code, branchxx
+
+    # override JSR to provide reference/label support (like branches)
+    def jsr(self, reg, dst):
+        # anything not a label handled by the regular jsr method:
+        if not self._allowable_label(dst):
+            return super().jsr(reg, dst)
+
+        # labels become operand mode 0o67 ... PC-relative w/offset
+        inst = 0o004067 | (self.register_parser(reg) << 6)
+        x = self.getlabel(dst, fwdfactory=JumpTarget)
+        try:
+            offs = self._neg16(x - (2 * (len(self) + 2)))
+        except TypeError:
+            # forward reference will be patched later
+            offs = x
+
+        return self._seqwords([inst, offs])
+
+    # override JMP to provide reference/label support (like branches)
+    def jmp(self, dst):
+        # anything not a label handled by the regular jmp method:
+        if not self._allowable_label(dst):
+            return super().jmp(dst)
+
+        # labels become operand mode 0o67 ... PC-relative w/offset
+        inst = 0o000167
+        x = self.getlabel(dst, fwdfactory=JumpTarget)
+        try:
+            offs = self._neg16(x - (2 * (len(self) + 2)))
+        except TypeError:
+            # forward reference will be patched later
+            offs = x
+
+        return self._seqwords([inst, offs])
 
     def sob(self, reg, target):
         # the register can be a naked integer 0 .. 5 or an 'r' string
@@ -607,6 +689,21 @@ if __name__ == "__main__":
                 a.mov(a.getlabel('xyzzy'), 'r0')
             with self.assertRaises(ValueError):
                 foo = list(a)
+
+        def test_nocontext(self):
+            a = InstructionBlock()
+            a.mov('r0', 'r1')
+            a.br('bozo')
+            a.mov('r1', 'r2')
+            a.label('bozo')
+            a.mov('r2', 'r3')
+            with ASM() as b:
+                b.mov('r0', 'r1')
+                b.br('bozo')
+                b.mov('r1', 'r2')
+                b.label('bozo')
+                b.mov('r2', 'r3')
+            self.assertEqual(list(a), list(b))
 
         def test_sob(self):
             for i in range(63):   # 0..62 because the sob also counts
