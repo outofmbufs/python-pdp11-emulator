@@ -46,14 +46,6 @@ class PDP11InstructionAssembler:
         B6MODES[f"@-({_rn})"] = 0o50 | _i   # autodecr deferred
     del _i, _rn, _rnames
 
-    # see InstructionBlock for explanation of 'with' syntax use
-    @classmethod
-    def __enter__(cls):
-        return InstructionBlock()
-
-    def __exit__(self, *args, **kwargs):
-        return None
-
     def __iter__(self):
         if self._fwdrefs:
             raise ValueError(f"unresolved refs: " f"{list(self._fwdrefs)}")
@@ -354,26 +346,34 @@ class BranchTarget(FwdRef):
 # of results from calling the instruction methods.
 #
 # Instead of:
+#   a = PDP11InstructionAssembler()
 #   insts = (
 #       a.mov('r1', 'r2'),
 #       a.clr('r0'),
 #          etc ...
 #       )
 #
-# The context manager can be used to write it this way:
+# An InstructionBlock can be used this way:
 #
-#   with ASM() as a:
-#       a.mov('r1', 'r2')
-#       a.clr('r0')
-#        etc ...
+# a = InstructionBlock()
+# a.mov('r1', 'r2')
+# a.clr('r0')
+# etc ...
 #
-# which, subject to opinion, may be notationally cleaner/clearer and also
-# opens the possibility of if/for/etc full programming constructs as needed.
+# Each call to an instruction method appends that instruction to the block.
+# Subject to opinion, this may be notationally cleaner/clearer and also
+# opens the possibility of if/for/etc full programming constructs in
+# forming the instruction sequence itself.
 #
-# The context manager also supports bare-bones labels, helpful for branches
+# An InstructionBlock adds simple label support as well, useful for branching.
 #
-# If treated as an iterable, returns a list of instruction words.
-# Typically used like this:
+# If care is taken to write position-independent code, an InstructionBlock
+# can eventually be placed at any arbitrary location in memory. When labels
+# are used in jmp or jsr instructions, they are automatically assembled
+# as PC-relative offsets (mode = 0o67) rather than absolute values.
+#
+# The current list of instruction words is available by using the
+# instruction block as an iterable. For example:
 #
 #   instlist = list(a)
 #
@@ -383,21 +383,9 @@ class BranchTarget(FwdRef):
 #       raises a ValueError. This can be suppressed (usually only useful
 #       for debugging) by requesting a._instructions()
 #
-#
-# NOTE: The "with" construct is just notationally convenient; nothing
-#       happens in context exit and the instruction block continues to
-#       be valid afterwards. This:
-#           with ASM() as a:
-#              a.mov('r1', 'r2')
-#
-#       is completely equivalent to:
-#
-#           a = InstructionBlock()
-#           a.mov('r1', 'r2')
-#
 
 
-class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
+class InstructionBlock(PDP11InstructionAssembler):
     def __init__(self):
         super().__init__()
         self._instblock = []
@@ -628,7 +616,18 @@ class InstructionBlock(PDP11InstructionAssembler, AbstractContextManager):
         """Generate lines of SIMH deposit commands."""
 
         for offs, w in enumerate(self):
-            yield f"D {oct(startaddr + (2 * offs))[2:]} {oct(w)[2:]}"
+            yield f"D {oct(startaddr + (2 * offs))[2:]} {oct(w)[2:]}\n"
+
+    # This method shows one typical way to use the simh generator
+    #
+    # A .ini file full of deposit ('D') commands starting at startaddr
+    # will be created from the instructions in the InstructionBlock
+    def export_to_simh_ini(self, outfilename, /, *, startaddr=0o10000):
+        with open(outfilename, 'w') as f:
+            for s in self.simh(startaddr=startaddr):
+                f.write(s)
+            # and set the PC to the start address
+            f.write(f"D PC {oct(startaddr)[2:]}\n")
 
 
 if __name__ == "__main__":
@@ -642,27 +641,27 @@ if __name__ == "__main__":
         def test_bne_label_distance(self):
             # this should just execute without any issue
             for i in range(127):
-                with ASM() as a:
-                    a.label('foo')
-                    for _ in range(i):
-                        a.mov('r0', 'r0')
-                    a.bne('foo')
+                a = InstructionBlock()
+                a.label('foo')
+                for _ in range(i):
+                    a.mov('r0', 'r0')
+                a.bne('foo')
 
             # but this should ValueError ... branch too far
-            with ASM() as a:
-                a.label('foo')
-                for _ in range(128):
-                    a.mov('r0', 'r0')
-                with self.assertRaises(ValueError):
-                    a.bne('foo')
+            a = InstructionBlock()
+            a.label('foo')
+            for _ in range(128):
+                a.mov('r0', 'r0')
+            with self.assertRaises(ValueError):
+                a.bne('foo')
 
         def test_labelmath_dot(self):
-            with ASM()as a:
-                a.mov('bozo', 'r0')
-                a.label('B')
-                a.label('BP2', value='. + 2')
-                a.clr('r0')
-                a.label('bozo')
+            a = InstructionBlock()
+            a.mov('bozo', 'r0')
+            a.label('B')
+            a.label('BP2', value='. + 2')
+            a.clr('r0')
+            a.label('bozo')
 
             self.assertEqual(a.getlabel('B'), 4)
             self.assertEqual(a.getlabel('BP2'), 6)
@@ -670,50 +669,50 @@ if __name__ == "__main__":
             self.assertEqual(list(a)[1], 6)
 
         def test_labelmath_plus(self):
-            with ASM() as a:
-                a.label('L1', value=17)
-                a.label('L2', value='L1 + 25.')
+            a = InstructionBlock()
+            a.label('L1', value=17)
+            a.label('L2', value='L1 + 25.')
             self.assertEqual(a.getlabel('L2'), 42)
 
         def test_labelmath_minus(self):
-            with ASM() as a:
-                a.label('L1')
-                a.clr('r0')
-                a.label('L2', value='. - L1')
+            a = InstructionBlock()
+            a.label('L1')
+            a.clr('r0')
+            a.label('L2', value='. - L1')
             self.assertEqual(a.getlabel('L2'), 2)
 
         def test_unresolved(self):
-            with ASM() as a:
-                a.br('bozo')
-                a.clr('r0')
-                a.mov(a.getlabel('xyzzy'), 'r0')
+            a = InstructionBlock()
+            a.br('bozo')
+            a.clr('r0')
+            a.mov(a.getlabel('xyzzy'), 'r0')
             with self.assertRaises(ValueError):
                 foo = list(a)
 
-        def test_nocontext(self):
+        def test_identity(self):
             a = InstructionBlock()
             a.mov('r0', 'r1')
             a.br('bozo')
             a.mov('r1', 'r2')
             a.label('bozo')
             a.mov('r2', 'r3')
-            with ASM() as b:
-                b.mov('r0', 'r1')
-                b.br('bozo')
-                b.mov('r1', 'r2')
-                b.label('bozo')
-                b.mov('r2', 'r3')
+            b = InstructionBlock()
+            b.mov('r0', 'r1')
+            b.br('bozo')
+            b.mov('r1', 'r2')
+            b.label('bozo')
+            b.mov('r2', 'r3')
             self.assertEqual(list(a), list(b))
 
         def test_sob(self):
             for i in range(63):   # 0..62 because the sob also counts
                 with self.subTest(i=i):
-                    with ASM() as a:
-                        a.label('foosob')
-                        for _ in range(i):
-                            a.mov('r0', 'r0')
-                        inst = a.sob(0, 'foosob')
-                        self.assertEqual(len(inst), 1)
-                        self.assertEqual(inst[0] & 0o77, i+1)
+                    a = InstructionBlock()
+                    a.label('foosob')
+                    for _ in range(i):
+                        a.mov('r0', 'r0')
+                    inst = a.sob(0, 'foosob')
+                    self.assertEqual(len(inst), 1)
+                    self.assertEqual(inst[0] & 0o77, i+1)
 
     unittest.main()
