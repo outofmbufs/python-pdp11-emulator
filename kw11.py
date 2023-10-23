@@ -26,40 +26,39 @@ import time
 import threading
 
 
+# The real clock runs at 50 or 60 cycles per second. However, the
+# overhead of emulated interrupts is high - as a compromise set HZ
+# to something slower than 50-60...
+HZ = 25
+
+
 class KW11:
 
     KW11_OFFS = 0o17546
 
     def __init__(self, ub):
         self._t = threading.Thread(
-            target=self._cloop, args=(0.05, ub.intmgr), daemon=True)
-        self.running = False
-        self.monbit = 0
+            target=self._cloop, args=(1/HZ, ub.intmgr), daemon=True)
+        self.interrupts_enabled = False
+        self.monbit = 1       # the manual says this starts as 1
         ub.mmio.register_simpleattr(self, 'LKS', self.KW11_OFFS, reset=True)
+        self._t.start()
 
     # clock loop
     def _cloop(self, interval, imgr):
-        while self.running:
+        while True:
             time.sleep(interval)
-            # there are inherent races here (in the hardware too) but
-            # seek to make the hazard smaller than the full interval
-            # by testing self.running again here.
-            if self.running:
+            self.monbit = 1
+            # The loop runs forever (as does the real device) but only
+            # generates interrupts if interrupts are enabled
+            if self.interrupts_enabled:
                 imgr.simple_irq(pri=6, vector=0o100)
 
     @property
     def LKS(self):
-        return (int(self.monbit) << 7) | (int(self.running) << 6)
+        return (int(self.monbit) << 7) | (int(self.interrupts_enabled) << 6)
 
     @LKS.setter
     def LKS(self, value):
-        if not self.running:
-            if value & 0o100:
-                self.running = True
-                self._t.start()
-
-        self.monbit = (value & 0o200)
-        if self.running and not (value & 0o100):
-            # this never happens in unix but ...
-            self.running = False
-            self._t.join()
+        self.interrupts_enabled = bool(value & 0o100)
+        self.monbit = bool(value & 0o200)
