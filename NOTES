@@ -55,7 +55,7 @@ without floating point.
 Either way, sysIII won't boot because of this.
 
 I did try an ungodly hack in mmu.py to (wait for the amazingness of this)...
-ignore the first two writes into instruction space if they occur in kernel
+ALLOW the first two writes into instruction space if they occur in kernel
 mode (that was a temporary alteration, I took the code back out of course).
 This allowed sysIII to get past this problem, but it still wouldn't boot.
 I'm not sure why; I have a guess it might not like my disk driver emulation
