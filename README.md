@@ -10,6 +10,9 @@ It was fun.
 
 If you like it, great. If you think it is silly, so it goes.
 
+## MORE NOTES
+See NOTES file for running commentary on status, etc.
+
 ## RUNNING A BARE PDP-11
 Do it like this:
 
