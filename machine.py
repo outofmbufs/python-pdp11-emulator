@@ -214,6 +214,8 @@ class PDP11:
         self.logger.info(f"{self.__class__.__name__} started;"
                          f" Logging level={logging.getLevelName(loglevel)}.")
 
+        # registers but usually get overridden by model-specific subclass
+        self.r = [0] * 8
         self.ub = unibus(self) if unibus else UNIBUS(self)
         self.mmu = MemoryMgmt(self)
 
@@ -729,7 +731,8 @@ class PDP11:
     def swleds(self, v):          # writing to the lights is a no-op for now
         pass
 
-    # technically not all -11's have this, but ... meh do it here anyway
+    # technically not all -11's have stack limit support.
+    # Meh, do it in base class anyway
     @property
     def stack_limit_register(self):
         return self._stklim
@@ -749,9 +752,12 @@ class PDP11:
         # have been fixed by slamming strapcheck back to false after that.
         # But this way ensures The Right Thing happens no matter what.
         # Performance is no issue in setting the stack limit obviously.
-        if hasattr(self, '_stklim'):
-            self.straps |= self.STRAPBITS.YELLOW
+        self.logger.debug(
+            f"setting stack limit to {oct(v)}, sp={oct(self.r[6])}")
+        checkit = hasattr(self, '_stklim')
         self._stklim = v & 0o177400
+        if checkit:
+            self.redyellowcheck()
 
     def stackpush(self, w):
         self.r[6] = self.u16add(self.r[6], -2)
@@ -1009,6 +1015,7 @@ class PDP1170(PDP11):
 
         # these are redundant but convenient to have broken out
         d['CURMODE'] = self.psw_curmode
+        d['PREVMODE'] = self.psw_prevmode
         d['PRI'] = self.psw_pri
 
         for m in (0, 1, 3):
@@ -1018,7 +1025,8 @@ class PDP1170(PDP11):
             d[mmr] = getattr(self.mmu, mmr)
 
         try:
-            d['MMR2inst'] = self.mmu.wordRW(self.mmu.MMR2)
+            # _invisread so as not to disturb state (MMR/cpuerror regs etc)
+            d['MMR2inst'] = self.mmu._invisread(self.mmu.MMR2)
         except PDPTrap as e:
             d['MMR2inst'] = e
 
