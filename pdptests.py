@@ -1726,6 +1726,7 @@ class TestMethods(unittest.TestCase):
             a.mov(i, 'r0')
         a.clr('r0')
         a.halt()
+        self.loadphysmem(p, a, startaddr)
 
         for i in range(maxtest):
             bp = BKP.Lookback(BKP.StepsBreakpoint(steps=i+1))
@@ -1740,8 +1741,32 @@ class TestMethods(unittest.TestCase):
                     self.assertEqual(len(bp.states), default_lookbacks)
                 self.assertEqual(len(bp7.states), min(i+1, 7))
 
-    def test_jmp(self):
-        """In many ways more of a test of InstructionBlock labels..."""
+    def test_jmp10(self):
+        """Test of JMP (R0) instruction (mode 0o10)"""
+        p = self.make_pdp()
+
+        instloc = 0o10000
+        a = InstructionBlock()
+        a.clr('r2')
+        a.jmp('(r0)')         # test driver code will set R0 to ...
+        a.inc('r2')           # various
+        a.inc('r2')           #    different
+        a.inc('r2')           #       locations
+        a.inc('r2')           #         among these
+        a.halt()
+
+        self.loadphysmem(p, a, instloc)
+
+        for offs, r2 in ((4, 4), (6, 3), (8, 2), (10, 1), (12, 0)):
+            p.r[0] = instloc + offs
+            p.run(pc=instloc)
+            with self.subTest(offs=offs):
+                self.assertEqual(p.r[2], r2)
+
+    def test_jmp67(self):
+        """Test of JMP offs(PC) instruction (mode 0o67)"""
+        # this is really more of a test of InstructionBLock jmp offset
+        # calculations than it is a test of jmp itself
         p = self.make_pdp()
 
         a = InstructionBlock()
@@ -1772,13 +1797,14 @@ class TestMethods(unittest.TestCase):
         a.jmp('X0')
         a.halt()
 
-        print("\n")
-        print(list(map(oct, a)))
-
         instloc = 0o4000
         self.loadphysmem(p, a, instloc)
         p.run(pc=instloc)
-        print("\n", p.machinestate())
+
+        # results by hand-computation but also cross verified in SIMH
+        self.assertEqual(p.r[0], 8)
+        self.assertEqual(p.r[1], 3)
+        self.assertEqual(p.r[2], 7)
 
     def test_jsrco(self):
         """Another special case of the JSR instruction is JSR
