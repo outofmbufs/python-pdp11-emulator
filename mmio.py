@@ -257,7 +257,7 @@ class MMIO:
             return value
 
         # NOTE: Registers a different ("closure of") rwattr each time.
-        self.register(_rwattr, addr, 1, reset=reset)
+        return self.register(_rwattr, addr, 1, reset=reset)
 
     # In the real hardware, the PDP-11 RESET instruction pulls a reset line
     # that all devices can see. In the emulation, devices that need to know
