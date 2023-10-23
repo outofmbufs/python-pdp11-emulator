@@ -1,0 +1,74 @@
+Miscellaneous notes about the emulation
+
+RUNNING OTHER LEGACY SYSTEMS
+
+I have tried to boot unixv6, but it requires an RK emulation. Emulating
+those drives should not be difficult but I just haven't gotten to it.
+
+
+I tried to boot sysIII unix. Amusingly, it has a bug (I think this is
+a bug) ... it won't boot on an 11/70-compatible system that lacks the
+floating point option (this is a weird dependency!)
+
+The reason is that if there is split instruction and data space, the
+boot code (reasonably and what you want it to do) separates out the
+instruction and data segments of the kernel and then marks the instruction
+segment read-only. This is all good stuff.
+
+THEN, in the boot sequence before main() of UNIX kernel is invoked, it
+does this:
+
+[ this code in start.s in /usr/src/uts/pdp11/ml/mch_id in a sysiii system ]
+
+     / test for floating point hardware
+         setd
+     nofpp:
+
+The way this "tests" for floating point hardware is quite obscure.
+If there is not floating point hardware, setd is an illegal instruction.
+Going to the trap handler (trap.s in same directory) the code for
+illegal instruction traps does this:
+
+        bit     $20000,PS
+        bne     2f
+        cmp     (sp),$nofpp
+        bne     2f
+        mov     $PRSUPR,PS
+        mov     $RTSPC,-(sp)
+        mtpi    _savfp
+        mov     $RTSPC,-(sp)
+        mtpi    _restfp
+
+This is awesome. It looks to see if executing in kernel mode, then it
+looks to see if the illegal instruction occurred at 'nofpp' (the pc is
+always PAST the illegal instruction when the trap occurs), and if so,
+then it... PATCHES an "rts PC" instruction into the instruction space
+at the start of savfp() and restfp(), turning them into no-ops.
+
+Unfortunately, this code executes after the boot process has turned on
+separation of I and D spaces and marked the I space read-only. So it crashes.
+
+I have to assume that either there is no such thing as an 11/70 without
+floating point, or that "out in the wild" no one ever ordered an 11/70
+without floating point.
+
+Either way, sysIII won't boot because of this.
+
+I did try an ungodly hack in mmu.py to (wait for the amazingness of this)...
+ignore the first two writes into instruction space if they occur in kernel
+mode (that was a temporary alteration, I took the code back out of course).
+This allowed sysIII to get past this problem, but it still wouldn't boot.
+I'm not sure why; I have a guess it might not like my disk driver emulation
+details (as I only emulate a subset of total functionality, which was enough
+to get unixv7 going). But I have not analyzed this any further.
+
+At some point "why aren't you just using SIMH" becomes the right answer.
+But it would have been nice to get another unix system going just as further
+validation of the emulation fidelity.
+
+OTHER SYSTEMS: I tried a few of the RT/RSX/etc DEC-native systems but
+couldn't get them to boot. I did not analyze why. I imagine, of course,
+there are more fidelity issues with this emulation.
+
+
+
