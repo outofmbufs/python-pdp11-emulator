@@ -30,6 +30,10 @@
 #
 # Essentially it is emulating serial cables that are never plugged in. :)
 #
+# Without this trivial emulation, the default configuration of unix v7 will
+# crash going into multiuser mode as it expects the device to be there (i.e.
+# it expects the I/O addresses to respond and crashes if they bus-fault)
+#
 
 class DC11:
     DC11_DEFAULT = 0o14000           # offset within I/O page
