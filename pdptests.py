@@ -454,9 +454,10 @@ class TestMethods(unittest.TestCase):
         # this code sequence taken from Unix startup, it's not really
         # much of a test.
         with ASM() as a:
-            a.mov(0o0122451, 'r2')           # mov #122451,R2
-            a.literal(0o072200, 0o0177772)   # ash -6,R2
-            a.bic(0o0176000, 'r2')           # bic #0176000,R2
+            a.mov(0o0122451, 'r2')
+            neg6 = -6 & 0xFFFF
+            a.ash(neg6, 'r2')
+            a.bic(0o0176000, 'r2')
             a.halt()
 
         p = self.make_pdp()
@@ -1748,6 +1749,46 @@ class TestMethods(unittest.TestCase):
                     self.assertEqual(len(bp.states), default_lookbacks)
                 self.assertEqual(len(bp7.states), min(i+1, 7))
 
+    def test_jmp(self):
+        """In many ways more of a test of ASM module labels..."""
+        p = self.make_pdp()
+
+        with ASM() as a:
+            a.clr('r0')
+            a.clr('r1')
+            a.clr('r2')
+            a.jmp('X2')
+
+            a.label('X0')
+            a.inc('r0')
+            a.add(2, 'r1')
+            a.add(3, 'r2')
+            a.jmp('X1')
+
+            # never executed
+            a.clr('r0')
+            a.clr('r1')
+            a.clr('r2')
+
+            a.label('X1')
+            a.inc('r1')
+            a.add('r1', 'r2')
+            a.add('r2', 'r0')
+            a.halt()
+            
+            a.label('X2')
+            a.inc('r2')
+            a.jmp('X0')
+            a.halt()
+
+        print("\n")
+        print(list(map(oct, a)))
+
+        instloc = 0o4000
+        self.loadphysmem(p, a, instloc)
+        p.run(pc=instloc)
+        print("\n", p.machinestate())
+
     def test_jsrco(self):
         """Another special case of the JSR instruction is JSR
         PC, @(SP) + which exchanges the top element of
@@ -1757,7 +1798,9 @@ class TestMethods(unittest.TestCase):
         when recalled where they left off. Such routines
         are called 'co-routines.'
         """
-        pass
+        p = self.make_pdp()
+        with ASM() as a:
+            pass
 
     def test_ubmap(self):
         p = self.make_pdp()
