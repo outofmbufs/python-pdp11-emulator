@@ -223,7 +223,7 @@ class PDP11InstructionAssembler:
     def br(self, offs):
         return self.literal(0o000400 | (offs & 0o377))
 
-    # note: gets overridden i nInstructionBlock to add label support
+    # note: gets overridden in InstructionBlock to add label support
     def jsr(self, reg, dst):
         return self._1op(0o004000 | (self.register_parser(reg) << 6), dst)
 
@@ -249,7 +249,7 @@ class PDP11InstructionAssembler:
         return self._1op(0o006300, dst)
 
     def asrb(self, dst):
-        return self._1op(0o106000, dst)
+        return self._1op(0o106200, dst)
 
     def ash(self, cnt, dst):
         dstreg = self.register_parser(dst)
