@@ -251,6 +251,9 @@ class PDP11InstructionAssembler:
     def asrb(self, dst):
         return self._1op(0o106200, dst)
 
+    def rorb(self, dst):
+        return self._1op(0o106000, dst)
+
     def ash(self, cnt, dst):
         dstreg = self.register_parser(dst)
         return self.literal(0o072000 | dstreg << 6, cnt)
