@@ -458,6 +458,25 @@ class TestMethods(unittest.TestCase):
         p.run(pc=instloc)
         self.assertEqual(p.r[2], 0o1224)
 
+    def test_shiftb(self):
+        # test correct operation of byte operations on registers
+        # r2 counts test progress
+        a = InstructionBlock()
+        a.clr('r2')
+        a.mov(0o177401, 'r0')
+        a.literal(0o106300)        # ASLB R0
+        a.cmp(0o177402, 'r0')
+        a.bne('fail')
+        a.inc('r2')
+        a.halt()
+        a.label('fail')
+        a.halt()
+        p = self.make_pdp()
+        instloc = 0o4000
+        self.loadphysmem(p, a, instloc)
+        p.run(pc=instloc)
+        self.assertEqual(p.r[2], 1)
+
     def test_br(self):
         # though the bug has been fixed, this is a test of whether
         # all branch offset values work correctly. Barn door shut...
