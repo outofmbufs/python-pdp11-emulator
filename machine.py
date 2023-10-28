@@ -433,9 +433,10 @@ class PDP11:
                 case Rn, None, 1:
                     value = self.r[Rn] & 0o377
                 case Rn, bv, 1:
-                    self.r[Rn] = bv
-                    if bv > 127:
-                        self.r[Rn] |= 0xFF00
+                    # NOTE: The MOVB instruction has different semantics
+                    #       than this; it is coded explicitly in op11_movb()
+                    self.r[Rn] &= 0o177400
+                    self.r[Rn] |= (bv & 0o377)
             return (value, b6) if rmw else value
 
         # harder cases
@@ -530,22 +531,16 @@ class PDP11:
     # convenience, creates a breakpoint to stop at the given pc,
     # optionally limited to a specific mode (KERNEL, USER, SUPERVISOR)
     def run_until(self, *args, stoppc, stopmode=None, **kwargs):
-        """Run processor with breakpoint at 'stopat'.
+        """Run processor with breakpoint at 'stoppc'.
 
-        If stopat is an integer, stop at that PC value in any mode.
-        If stopat is a tuple, stop at (pc, mode) where mode
-            is self.KERNEL, self.SUPERVISOR or self.USER
+        if stopmode is None (default), stop at the stoppc in any mode.
+        Otherwise, only stop if mode is stopmode.
         """
         bpt = PCBreakpoint(stoppc=stoppc, stopmode=stopmode)
         return self.run(*args, breakpoint=bpt, **kwargs)
 
     def run(self, *, pc=None, breakpoint=None):
-        """Run the machine for a number of steps (instructions).
-
-        If steps is None (default), the machine runs until a HALT instruction
-        is encountered. It may run forever and the method might never return.
-
-        Otherwise, it runs for that many instructions (or until a HALT).
+        """The CPU main loop - run the machine!
 
         If pc is None (default) execution begins at the current pc; otherwise
         the pc is set to the given value first.
