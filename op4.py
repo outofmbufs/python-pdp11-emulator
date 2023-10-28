@@ -98,9 +98,16 @@ def op11_movb(cpu, inst):
     cpu.psw_z = (val == 0)
     cpu.psw_n = (val & 0o200)
 
-    # No optimization on the write side, because doing so would require
-    # duplicating the sign-extend logic here. Yuck.
-    cpu.operandx(inst & 0o0077, val, opsize=1)
+    # avoid call to the more-general operandx for mode 0, direct register
+    # not only as an optimization, but because unlike other byte operations
+    # in register-direct mode, MOVB does a sign-extend.
+    dst = inst & 0o0077
+    if (dst < 8):             # i.e., mode 0
+        if val > 127:
+            val |= 0o177400
+        cpu.r[dst] = val
+    else:
+        cpu.operandx(dst, val, opsize=1)
 
 
 def op02_cmp(cpu, inst, opsize=2):
