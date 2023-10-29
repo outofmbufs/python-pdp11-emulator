@@ -402,6 +402,7 @@ class InstructionBlock(PDP11InstructionAssembler):
     # Extend base operand_parser with ability to handle labels,
     # including forward references
     def operand_parser(self, operand_token, *args, **kwargs):
+
         # it's possible to get here with operand_token already
         # being a forward ref (e.g., if getlabel was used)
         if isinstance(operand_token, FwdRef):
@@ -414,7 +415,7 @@ class InstructionBlock(PDP11InstructionAssembler):
                     raise
 
             # falling through to here means it is a label or forward reference
-            return self.getlabel(operand_token)
+            return [0o27, self.getlabel(operand_token)]
 
     def __len__(self):
         """Returns the length of the sequence in WORDS"""
@@ -438,6 +439,8 @@ class InstructionBlock(PDP11InstructionAssembler):
     def _allowable_label(self, s):
         if not hasattr(s, 'isalpha'):
             return False
+        if s[0] == '+':
+            s = s[1:]
         return ((s.upper() not in self.B6MODES) and
                 (s[0].isalpha() or s[0] == '_'))
 
@@ -657,6 +660,16 @@ if __name__ == "__main__":
                 a.mov('r0', 'r0')
             with self.assertRaises(ValueError):
                 a.bne('foo')
+
+        def test_backlab(self):
+            a = InstructionBlock()
+            a.mov('bozo', 'r0')
+            a.clr('r1')
+            a.label('bozo')
+            a.mov('bozo', 'r1')
+
+            insts = list(a)
+            self.assertEqual(list(a), [0o012700, 6, 0o005001, 0o012701, 6])
 
         def test_labelmath_dot(self):
             a = InstructionBlock()
