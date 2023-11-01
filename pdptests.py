@@ -1040,8 +1040,10 @@ class TestMethods(unittest.TestCase):
 
         k.mov('pc', '-(sp)')
         # add the offset to (forward ref) back_from_u
-        k.add(k.getlabel('back_from_u'), '(sp)')
-
+        k.add(k.getlabel('back_from_u', pcrel=True), '(sp)')
+        # but because of how constructing this, need to unadjust by 4
+        # (because this isn't in the instruction stream the normal way)
+        k.add(4, '(sp)')
         k.mov(0o140340, '-(sp)')   # push user-ish PSW to K stack
         k.mov(u.getlabel('setup'), '-(sp)')   # PC for setup code
         k.rtt()
@@ -1769,9 +1771,9 @@ class TestMethods(unittest.TestCase):
         a.clr('r2')
         a.jmp('(r0)')         # test driver code will set R0 to ...
         a.inc('r2')           # various
-        a.inc('r2')           #    different
-        a.inc('r2')           #       locations
-        a.inc('r2')           #         among these
+        a.inc('r2')           # ... different
+        a.inc('r2')           # ...... locations
+        a.inc('r2')           # ........  among these
         a.halt()
 
         self.loadphysmem(p, a, instloc)
@@ -1818,6 +1820,7 @@ class TestMethods(unittest.TestCase):
 
         instloc = 0o4000
         self.loadphysmem(p, a, instloc)
+
         p.run(pc=instloc)
 
         # results by hand-computation but also cross verified in SIMH
