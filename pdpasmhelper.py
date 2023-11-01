@@ -300,14 +300,14 @@ class PDP11InstructionAssembler:
 class FwdRef:
     """Values determined by a not-yet-seen label() definition."""
 
-    def __init__(self, name, block, *, pcrel=False):
+    def __init__(self, name, block, *, idxrel=False, idxadj=0):
         self.loc = len(block)
         self.name = name
         self.block = block
-        if pcrel:
-            self.pcadj = (2 * self.loc) + 4
+        if idxrel:
+            self.adjust = (2 * self.loc) + idxadj
         else:
-            self.pcadj = 0
+            self.adjust = 0
         block._fwdrefs[name].append(self)
 
     def __call__(self):
@@ -330,7 +330,7 @@ class FwdRef:
         return s
 
     def transform(self):
-        return self.block._neg16(self.block.getlabel(self.name) - self.pcadj)
+        return self.block._neg16(self.block.getlabel(self.name) - self.adjust)
 
 
 class BranchTarget(FwdRef):
@@ -429,7 +429,7 @@ class InstructionBlock(PDP11InstructionAssembler):
             # IF it starts with '+' it means use PC-relative addr mode
             # which will require some fussing around...
             if operand_token[0] == '+':
-                return [0o67, self.getlabel(operand_token[1:], pcrel=True)]
+                return [0o67, self.getlabel(operand_token[1:], idxrel=True, idxadj=4)]
             else:
                 return [0o27, self.getlabel(operand_token)]
 
@@ -496,7 +496,7 @@ class InstructionBlock(PDP11InstructionAssembler):
 
         return self._labels[name]
 
-    def getlabel(self, name, *, fwdfactory=FwdRef, pcrel=False):
+    def getlabel(self, name, *, fwdfactory=FwdRef, idxrel=False, idxadj=0):
         """Return value (loc) of name, which may be a FwdRef object.
 
         Label values are offsets relative to the start of the block.
@@ -514,10 +514,11 @@ class InstructionBlock(PDP11InstructionAssembler):
         try:
             x = self._labels[name]
         except KeyError:
-            return fwdfactory(name=name, block=self, pcrel=pcrel)
+            return fwdfactory(name=name, block=self,
+                              idxrel=idxrel, idxadj=idxadj)
         else:
-            if pcrel:
-                x = self._neg16(x - (2 * (len(self) + 2)))
+            if idxrel:
+                x = self._neg16(x - ((2 * len(self)) + idxadj))
             return x
 
     @staticmethod
@@ -584,7 +585,7 @@ class InstructionBlock(PDP11InstructionAssembler):
 
         # labels become operand mode 0o67 ... PC-relative w/offset
         inst = 0o004067 | (self.register_parser(reg) << 6)
-        offs = self.getlabel(dst, pcrel=True)
+        offs = self.getlabel(dst, idxrel=True, idxadj=4)
         return self._seqwords([inst, offs])
 
     def jmp(self, dst):
@@ -594,7 +595,7 @@ class InstructionBlock(PDP11InstructionAssembler):
 
         # labels become operand mode 0o67 ... PC-relative w/offset
         inst = 0o000167
-        return self._seqwords([inst, self.getlabel(dst, pcrel=True)])
+        return self._seqwords([inst, self.getlabel(dst, idxrel=True, idxadj=4)])
 
     def sob(self, reg, target):
         # the register can be a naked integer 0 .. 5 or an 'r' string
@@ -642,6 +643,9 @@ class InstructionBlock(PDP11InstructionAssembler):
             f.write(f"D PC {oct(startaddr)[2:]}\n")
 
 
+
+
+
 if __name__ == "__main__":
     import unittest
 
@@ -676,6 +680,7 @@ if __name__ == "__main__":
 
             insts = list(a)
             self.assertEqual(list(a), [0o012700, 6, 0o005001, 0o012701, 6])
+
 
         def test_labelmath_dot(self):
             a = InstructionBlock()
