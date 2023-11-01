@@ -266,7 +266,6 @@ class MemoryMgmt:
 
         NOTE: raises PDPTraps.MMU for untranslatable addresses
         NOTE: If not invis, updates A/W bits & sets straps as needed.
-                * Raises traps, updates A/W bits, & sets straps as needed.
         NOTE: 'reading' MUST be True or False, not anything else.
         """
 

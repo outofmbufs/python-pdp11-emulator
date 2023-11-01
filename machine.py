@@ -930,14 +930,13 @@ class PDP1170(PDP11):
         # could test if necessary but it's just easier to do this every time
         self._syncregs()           # in case any mode/regset changes
 
-        # prevent UNDEFINED_MODE from entering the PSW
+        # prevent UNDEFINED_MODE from entering the PSW (current mode)
         m = (value >> 14) & 3
         if m == self.UNDEFINED_MODE:
             raise PDPTraps.ReservedInstruction
-
         self.psw_curmode = m
 
-        # prevent UNDEFINED_MODE from entering the PSW
+        # prevent UNDEFINED_MODE from entering the PSW (previous mode)
         m = (value >> 12) & 3
         if m == self.UNDEFINED_MODE:
             raise PDPTraps.ReservedInstruction
