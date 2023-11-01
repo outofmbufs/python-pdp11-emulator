@@ -183,6 +183,26 @@ class TestMethods(unittest.TestCase):
         self.loadphysmem(p, a, instloc)
         return p, instloc
 
+    # test a typical sequence to set up a stack
+    # This is really a test of label support in pdpasmhelper
+    def test_fwdlabrel(self):
+        a = InstructionBlock()
+        a.clr('r0')     # just to have something here
+        # typical sequence to put stack at end of code
+        a.mov('pc', 'r0')
+        a.add(a.getlabel('stack', idxrel=True), 'r0')
+        a.mov('r0', 'sp')
+        a.halt()
+        a.literal(0o111111)
+        a.literal(0o777777)
+        a.label('stack')
+
+        p = self.make_pdp()
+        self.loadphysmem(p, a, 0o10000)
+        p.run(pc=0o10000)
+        self.assertEqual(p.mmu.wordRW(p.r[6] - 2), 0o777777)
+        self.assertEqual(p.mmu.wordRW(p.r[6] - 4), 0o111111)
+
     # these tests end up testing other stuff too of course, including MMU
     def test_mfpi(self):
 
@@ -1039,11 +1059,8 @@ class TestMethods(unittest.TestCase):
         k.mov(0o340, '*$36')
 
         k.mov('pc', '-(sp)')
-        # add the offset to (forward ref) back_from_u
-        k.add(k.getlabel('back_from_u', pcrel=True), '(sp)')
-        # but because of how constructing this, need to unadjust by 4
-        # (because this isn't in the instruction stream the normal way)
-        k.add(4, '(sp)')
+        # add the offset to (forward ref) back_from_u.
+        k.add(k.getlabel('back_from_u', idxrel=True), '(sp)')
         k.mov(0o140340, '-(sp)')   # push user-ish PSW to K stack
         k.mov(u.getlabel('setup'), '-(sp)')   # PC for setup code
         k.rtt()
