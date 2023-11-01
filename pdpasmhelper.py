@@ -267,6 +267,16 @@ class PDP11InstructionAssembler:
     def rti(self):
         return self.literal(2)
 
+    def nop(self):
+        return self.literal(0o000240)
+
+    def clc(self):
+        """Clear Carry"""
+        return self.literal(0o000241)
+
+    def wait(self):
+        return self.literal(1)
+
     def mtpi(self, dst):
         return self._1op(0o006600, dst)
 
@@ -290,10 +300,14 @@ class PDP11InstructionAssembler:
 class FwdRef:
     """Values determined by a not-yet-seen label() definition."""
 
-    def __init__(self, name, block):
+    def __init__(self, name, block, *, pcrel=False):
         self.loc = len(block)
         self.name = name
         self.block = block
+        if pcrel:
+            self.pcadj = (2 * self.loc) + 4
+        else:
+            self.pcadj = 0
         block._fwdrefs[name].append(self)
 
     def __call__(self):
@@ -309,17 +323,14 @@ class FwdRef:
     def __iter__(self):
         return iter([0o27, self])
 
-    def transform(self):
-        return self.block.getlabel(self.name) - (2 * self.loc)
+    def __repr__(self):
+        s = f"{self.__class__.__name__}<"
+        s += f"{str(self.name)}, block<len={len(self.block)}>"
+        s += f", loc={self.loc}>"
+        return s
 
-
-class JumpTarget(FwdRef):
-    # when a label is used as a PC-relative offset in a Jump (or JSR)
-    # target, the PC is already advanced according to where the literal of
-    # forward reference occurs in the stream. This has to be adjusted for.
     def transform(self):
-        return self.block._neg16(
-            self.block.getlabel(self.name) - (2 * (self.loc + 2)))
+        return self.block._neg16(self.block.getlabel(self.name) - self.pcadj)
 
 
 class BranchTarget(FwdRef):
@@ -415,7 +426,12 @@ class InstructionBlock(PDP11InstructionAssembler):
                     raise
 
             # falling through to here means it is a label or forward reference
-            return [0o27, self.getlabel(operand_token)]
+            # IF it starts with '+' it means use PC-relative addr mode
+            # which will require some fussing around...
+            if operand_token[0] == '+':
+                return [0o67, self.getlabel(operand_token[1:], pcrel=True)]
+            else:
+                return [0o27, self.getlabel(operand_token)]
 
     def __len__(self):
         """Returns the length of the sequence in WORDS"""
@@ -480,7 +496,7 @@ class InstructionBlock(PDP11InstructionAssembler):
 
         return self._labels[name]
 
-    def getlabel(self, name, *, fwdfactory=FwdRef):
+    def getlabel(self, name, *, fwdfactory=FwdRef, pcrel=False):
         """Return value (loc) of name, which may be a FwdRef object.
 
         Label values are offsets relative to the start of the block.
@@ -496,9 +512,13 @@ class InstructionBlock(PDP11InstructionAssembler):
         forward references raise a TypeError
         """
         try:
-            return self._labels[name]
+            x = self._labels[name]
         except KeyError:
-            return fwdfactory(name=name, block=self)
+            return fwdfactory(name=name, block=self, pcrel=pcrel)
+        else:
+            if pcrel:
+                x = self._neg16(x - (2 * (len(self) + 2)))
+            return x
 
     @staticmethod
     def _neg16(x):
@@ -564,16 +584,9 @@ class InstructionBlock(PDP11InstructionAssembler):
 
         # labels become operand mode 0o67 ... PC-relative w/offset
         inst = 0o004067 | (self.register_parser(reg) << 6)
-        x = self.getlabel(dst, fwdfactory=JumpTarget)
-        try:
-            offs = self._neg16(x - (2 * (len(self) + 2)))
-        except TypeError:
-            # forward reference will be patched later
-            offs = x
-
+        offs = self.getlabel(dst, pcrel=True)
         return self._seqwords([inst, offs])
 
-    # override JMP to provide reference/label support (like branches)
     def jmp(self, dst):
         # anything not a label handled by the regular jmp method:
         if not self._allowable_label(dst):
@@ -581,14 +594,7 @@ class InstructionBlock(PDP11InstructionAssembler):
 
         # labels become operand mode 0o67 ... PC-relative w/offset
         inst = 0o000167
-        x = self.getlabel(dst, fwdfactory=JumpTarget)
-        try:
-            offs = self._neg16(x - (2 * (len(self) + 2)))
-        except TypeError:
-            # forward reference will be patched later
-            offs = x
-
-        return self._seqwords([inst, offs])
+        return self._seqwords([inst, self.getlabel(dst, pcrel=True)])
 
     def sob(self, reg, target):
         # the register can be a naked integer 0 .. 5 or an 'r' string
