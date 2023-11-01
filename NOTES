@@ -1,6 +1,31 @@
 Miscellaneous notes about the emulation
 
+******************
+ABOUT PDPASMHELPER
+******************
+
+This started as a way to make it easier for me to write simple
+assembly-language test programs. I really wanted to avoid reimplementing
+a full-blown assembler, so it was mostly about opcodes and addr modes.
+
+Then I got tired of hand-calculating labels for simple jumps/loops.
+So the InstructionBlock was born, and the label support, including
+forward references.
+
+The whole implementation of that is, in my opinion, a ridiculous hack and
+it has a lot of rough-edges and surprising semantics.
+
+It is what it is; it works good enough for the pdptests and the
+occasional hack/test program. The whole thing should probably just be
+chucked out the window as I am not super-interested in turning
+the "assembly helper" into a full-featured bug-free assembler...
+It really should just be replaced with a real assembler/toolchain.
+
+
+
+****************************
 RUNNING OTHER LEGACY SYSTEMS
+****************************
 
 I have tried to boot unixv6, but it requires an RK emulation. Emulating
 those drives should not be difficult but I just haven't gotten to it.
