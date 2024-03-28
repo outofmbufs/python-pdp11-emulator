@@ -150,6 +150,7 @@ def op04_bic(cpu, inst, opsize=2):
 
     cpu.psw_n = dst & cpu.SIGN816[opsize]
     cpu.psw_z = (dst == 0)
+    cpu.psw_v = 0
 
     cpu.operandx(xb6, dst, opsize=opsize)
 
