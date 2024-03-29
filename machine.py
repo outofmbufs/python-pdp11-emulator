@@ -465,6 +465,7 @@ class PDP11:
                 if addrmode == 0o30:
                     addr = self.mmu.wordRW(addr, space=space)
                     space = self.mmu.DSPACE
+                    autocrement = 2     # regardless of opsize used above
                 extendedb6 = None       # force update below
 
             # both autodecrement addrmode, PC - NOPE.
@@ -475,7 +476,12 @@ class PDP11:
             # both autodecrement addrmodes, not PC
             # note that bytes and -(SP) still decrement by 2
             case 0, 0o40 | 0o50 as addrmode, Rn:
-                autocrement = -2 if Rn == self.SP else -opsize
+                if Rn == self.SP:
+                    autocrement = -2
+                elif addrmode == 0o50:
+                    autocrement = -2
+                else:
+                    autocrement = -opsize
                 extendedb6 = None       # force update below
                 addr = self.u16add(self.r[Rn], autocrement)
                 if addrmode == 0o50:
