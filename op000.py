@@ -83,7 +83,7 @@ def op_swab(cpu, inst):
     val, xb6 = cpu.operandx(inst & 0o77, rmw=True)
 
     val = ((val >> 8) & cpu.MASK8) | ((val & cpu.MASK8) << 8)
-    cpu.psw_n = val & cpu.SIGN16
+    cpu.psw_n = val & cpu.SIGN8
 
     # note this screwy definition, per the handbook
     cpu.psw_z = ((val & cpu.MASK8) == 0)
