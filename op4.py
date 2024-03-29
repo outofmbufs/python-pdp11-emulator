@@ -96,7 +96,7 @@ def op11_movb(cpu, inst):
 
     cpu.psw_v = 0
     cpu.psw_z = (val == 0)
-    cpu.psw_n = (val & 0o200)
+    cpu.psw_n = True if val & 0o200 else False
 
     # avoid call to the more-general operandx for mode 0, direct register
     # not only as an optimization, but because unlike other byte operations
@@ -119,7 +119,7 @@ def op02_cmp(cpu, inst, opsize=2):
     t = (src - dst) & cpu.MASK816[opsize]
     cpu.psw_c = (src < dst)
     signbit = cpu.SIGN816[opsize]
-    cpu.psw_n = (t & signbit)
+    cpu.psw_n = True if t & signbit else False
     cpu.psw_z = (t == 0)
 
     # definition of V is: operands were of opposite signs and the sign
@@ -136,7 +136,7 @@ def op03_bit(cpu, inst, opsize=2):
     dst = cpu.operandx(inst & 0o0077, opsize=opsize)
     t = dst & src
 
-    cpu.psw_n = t & cpu.SIGN816[opsize]
+    cpu.psw_n = True if t & cpu.SIGN816[opsize] else False
     cpu.psw_z = (t == 0)
     cpu.psw_v = 0
     # cpu.logger.debug(f"BIT: {src=}, {dst=}, PSW={oct(cpu.psw)}")
@@ -148,7 +148,7 @@ def op04_bic(cpu, inst, opsize=2):
     dst, xb6 = cpu.operandx(inst & 0o0077, opsize=opsize, rmw=True)
     dst &= ~src
 
-    cpu.psw_n = dst & cpu.SIGN816[opsize]
+    cpu.psw_n = True if dst & cpu.SIGN816[opsize] else False
     cpu.psw_z = (dst == 0)
     cpu.psw_v = 0
 
@@ -161,7 +161,7 @@ def op05_bis(cpu, inst, opsize=2):
     dst, xb6 = cpu.operandx(inst & 0o0077, opsize=opsize, rmw=True)
     dst |= src
 
-    cpu.psw_n = dst & cpu.SIGN816[opsize]
+    cpu.psw_n = True if dst & cpu.SIGN816[opsize] else False
     cpu.psw_z = (dst == 0)
     cpu.psw_v = 0
 
@@ -178,7 +178,7 @@ def op06_add(cpu, inst):
     if cpu.psw_c:
         t &= cpu.MASK16
 
-    cpu.psw_n = (t & cpu.SIGN16)
+    cpu.psw_n = True if t & cpu.SIGN16 else False
     cpu.psw_z = (t == 0)
 
     # definition of V is: operands were of the same signs and the
@@ -197,7 +197,7 @@ def op16_sub(cpu, inst):
     dst, xb6 = cpu.operandx(inst & 0o0077, rmw=True)
 
     t = (dst - src) & cpu.MASK16     # note: this is opposite of CMP
-    cpu.psw_n = (t & cpu.SIGN16)
+    cpu.psw_n = True if t & cpu.SIGN16 else False
     cpu.psw_z = (t == 0)
 
     # definition of V is: operands were of opposite signs and the sign

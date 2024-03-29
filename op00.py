@@ -81,7 +81,7 @@ def op00_51_com(cpu, inst, opsize=2):
     # Hence the explicit masking
     val = (~val) & cpu.MASK816[opsize]
 
-    cpu.psw_n = val & cpu.SIGN816[opsize]
+    cpu.psw_n = True if val & cpu.SIGN816[opsize] else False
     cpu.psw_z = (val == 0)
     cpu.psw_v = 0
     cpu.psw_c = 1
@@ -94,7 +94,7 @@ def op00_52_inc(cpu, inst, opsize=2):
     val, xb6 = cpu.operandx(inst & 0o77, opsize=opsize, rmw=True)
     newval = (val + 1) & cpu.MASK816[opsize]
 
-    cpu.psw_n = newval & cpu.SIGN816[opsize]
+    cpu.psw_n = True if newval & cpu.SIGN816[opsize] else False
     cpu.psw_z = (newval == 0)
     cpu.psw_v = (newval == cpu.SIGN816)
     # C bit not affected
@@ -106,7 +106,7 @@ def op00_53_dec(cpu, inst, opsize=2):
     val, xb6 = cpu.operandx(inst & 0o77, opsize=opsize, rmw=True)
     newval = (val - 1) & cpu.MASK816[opsize]
 
-    cpu.psw_n = newval & cpu.SIGN816[opsize]
+    cpu.psw_n = True if newval & cpu.SIGN816[opsize] else False
     cpu.psw_z = (newval == 0)
     cpu.psw_v = (val == cpu.SIGN816[opsize])
     # C bit not affected
@@ -120,7 +120,7 @@ def op00_54_neg(cpu, inst, opsize=2):
     val, xb6 = cpu.operandx(inst & 0o77, opsize=opsize, rmw=True)
     newval = (-val) & cpu.MASK816[opsize]
 
-    cpu.psw_n = newval & cpu.SIGN816[opsize]
+    cpu.psw_n = True if newval & cpu.SIGN816[opsize] else False
     cpu.psw_z = (newval == 0)
     cpu.psw_v = (val == newval)    # happens at the maximum negative value
     cpu.psw_c = (newval != 0)
@@ -141,7 +141,7 @@ def op00_55_adc(cpu, inst, opsize=2):
         cpu.psw_v = 0
         cpu.psw_c = 0
 
-    cpu.psw_n = (val & cpu.SIGN816[opsize])
+    cpu.psw_n = True if val & cpu.SIGN816[opsize] else False
     cpu.psw_z = (val == 0)
 
     cpu.operandx(xb6, val, opsize=opsize)
@@ -160,7 +160,7 @@ def op00_56_sbc(cpu, inst, opsize=2):
         cpu.psw_v = 0
         cpu.psw_c = 0
 
-    cpu.psw_n = (val & cpu.SIGN816[opsize])
+    cpu.psw_n = True if val & cpu.SIGN816[opsize] else False
     cpu.psw_z = (val == 0)
 
     cpu.operandx(xb6, val, opsize=opsize)
@@ -170,7 +170,7 @@ def op00_57_tst(cpu, inst, opsize=2):
     """TST(B) (determined by opsize). Test destination."""
     dst = inst & 0o77
     val = cpu.operandx(dst, opsize=opsize)
-    cpu.psw_n = (val & cpu.SIGN816[opsize])
+    cpu.psw_n = True if val & cpu.SIGN816[opsize] else False
     cpu.psw_z = (val == 0)
     cpu.psw_v = 0
     cpu.psw_c = 0
@@ -183,7 +183,7 @@ def op00_60_ror(cpu, inst, opsize=2):
     vc = signmask if cpu.psw_c else 0
     cpu.psw_c, val = (val & 1), ((val >> 1) | vc) & cpu.MASK816[opsize]
 
-    cpu.psw_n = val & signmask
+    cpu.psw_n = True if val & signmask else False
     cpu.psw_z = (val == 0)
     cpu.psw_v = cpu.psw_n ^ cpu.psw_c
 
@@ -195,9 +195,9 @@ def op00_61_rol(cpu, inst, opsize=2):
     val, xb6 = cpu.operandx(inst & 0o77, opsize=opsize, rmw=True)
     signmask = cpu.SIGN816[opsize]
     vc = 1 if cpu.psw_c else 0
-    cpu.psw_c, val = (val & signmask), ((val << 1) | vc) & cpu.MASK816[opsize]
+    cpu.psw_c, val = True if (val & signmask) else False, ((val << 1) | vc) & cpu.MASK816[opsize]
 
-    cpu.psw_n = val & signmask
+    cpu.psw_n = True if val & signmask else False
     cpu.psw_z = (val == 0)
     cpu.psw_v = cpu.psw_n ^ cpu.psw_c
 
@@ -211,7 +211,7 @@ def op00_62_asr(cpu, inst, opsize=2):
     cpu.psw_c = (val & 1)
     val >>= 1
     val |= signbit
-    cpu.psw_n = (val & cpu.SIGN816[opsize])
+    cpu.psw_n = True if val & cpu.SIGN816[opsize] else False
     cpu.psw_z = (val == 0)
     cpu.psw_v = cpu.psw_n ^ cpu.psw_c
     cpu.operandx(xb6, val, opsize=opsize)
@@ -220,9 +220,9 @@ def op00_62_asr(cpu, inst, opsize=2):
 def op00_63_asl(cpu, inst, opsize=2):
     """ASL(B) - arithmetic shift left one bit."""
     val, xb6 = cpu.operandx(inst & 0o77, opsize=opsize, rmw=True)
-    cpu.psw_c = (val & cpu.SIGN816[opsize])
+    cpu.psw_c = True if val & cpu.SIGN816[opsize] else False
     val = (val << 1) & cpu.MASK816[opsize]
-    cpu.psw_n = (val & cpu.SIGN816[opsize])
+    cpu.psw_n = True if (val & cpu.SIGN816[opsize]) else False
     cpu.psw_z = (val == 0)
     cpu.psw_v = cpu.psw_n ^ cpu.psw_c
     cpu.operandx(xb6, val, opsize=opsize)

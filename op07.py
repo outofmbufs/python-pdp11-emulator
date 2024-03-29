@@ -58,7 +58,7 @@ def op070_mul(cpu, inst):
     cpu.r[dstreg] = (m >> 16) & 0xFFFF
     cpu.r[dstreg | 1] = m & 0xFFFF
 
-    cpu.psw_n = m & 0x80000000
+    cpu.psw_n = True if m & 0x80000000 else False
     if cpu.psw_n:
         cpu.psw_c = (m < 0xFFFF8000)
     else:
