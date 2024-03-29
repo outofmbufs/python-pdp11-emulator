@@ -304,6 +304,7 @@ def op00_67_sxt(cpu, inst):
     else:
         val = 0
     cpu.psw_z = not cpu.psw_n
+    cpu.psw_v = 0
     cpu.operandx(inst & 0o0077, val)
 
 
