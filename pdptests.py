@@ -430,6 +430,40 @@ class TestMethods(unittest.TestCase):
                 p.run(pc=instloc)
                 self.assertEqual(p.r[0], 65534)
 
+    def test_mode3(self):
+        # @(Rn)+ mode
+        instloc = 0o4000
+        ptrloc = 0o020000
+        dataloc = 0o030000
+        bval = 0o42
+        a = InstructionBlock()
+        a.mov(ptrloc, 'r0')
+        a.mov(dataloc, a.ptr(ptrloc))
+        a.movb(bval, '@(r0)+')
+        a.halt()
+        p = self.make_pdp()
+        self.loadphysmem(p, a, instloc)
+        p.run(pc=instloc)
+        self.assertEqual(p.physmem[dataloc >> 1], bval)
+        self.assertEqual(p.r[0], ptrloc+2)
+
+    def test_mode5(self):
+        # @-(Rn) mode
+        instloc = 0o4000
+        ptrloc = 0o020000
+        dataloc = 0o030000
+        bval = 0o42
+        a = InstructionBlock()
+        a.mov(ptrloc+2, 'r0')            # +2 because pre-decrement
+        a.mov(dataloc, a.ptr(ptrloc))
+        a.movb(bval, '@-(r0)')
+        a.halt()
+        p = self.make_pdp()
+        self.loadphysmem(p, a, instloc)
+        p.run(pc=instloc)
+        self.assertEqual(p.physmem[dataloc >> 1], bval)
+        self.assertEqual(p.r[0], ptrloc)
+
     def test_unscc(self):
         # more stuff like test_cc but specifically testing unsigned Bxx codes
         p = self.make_pdp()
