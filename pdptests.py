@@ -464,6 +464,24 @@ class TestMethods(unittest.TestCase):
         self.assertEqual(p.physmem[dataloc >> 1], bval)
         self.assertEqual(p.r[0], ptrloc)
 
+    def test_swab(self):
+        # mostly about testing the N bit which behaves... this way
+        instloc = 0o4000
+        a = InstructionBlock()
+        a.mov(0o377, 'r0')
+        a.swab('r0')
+        a.halt()
+        a.swab('r0')
+        a.halt()
+        p = self.make_pdp()
+        self.loadphysmem(p, a, instloc)
+        p.run(pc=instloc)
+        self.assertEqual(p.r[0], 0o377 << 8)
+        self.assertFalse(p.psw_n)
+        p.run()           # resume after first halt
+        self.assertEqual(p.r[0], 0o377)
+        self.assertTrue(p.psw_n)
+
     def test_unscc(self):
         # more stuff like test_cc but specifically testing unsigned Bxx codes
         p = self.make_pdp()
