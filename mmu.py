@@ -390,8 +390,18 @@ class MemoryMgmt:
     # I/D separation for a given mode and possibly folding D space
     # requests into the I space APRs, this computes an "unfolded" shadow
     # version of the APRs that v2p can just use directly.
-
-    def _unfoldAPR(self):
+    #
+    # AS AN OPTIMIZATION: when a new unfolding is needed all that happens
+    # is _unfoldedAPR is set to None. No unfolding happens until later when
+    # _getunfoldedapr() calls this with "now=True". The advantage of this
+    # deferral is to speed up context switch code which (for example) will
+    # typically do 8 back to back PAR writes; there is no reason to do
+    # a unfolding 8 times instead of just once, and context switch
+    # performance does matter.
+    def _unfoldAPR(self, now=False):
+        if not now:
+            self._unfoldedAPR = None         # will be done later!
+            return
         self._unfoldedAPR = [[[0, 0] for _ in range(8)] for setno in range(8)]
         for mode in (self.cpu.SUPERVISOR, self.cpu.KERNEL, self.cpu.USER):
             for space in (self.ISPACE, self.DSPACE):
@@ -406,13 +416,19 @@ class MemoryMgmt:
 
     def _getunfoldedapr(self, xkey):
         nth = (xkey.mode * 2) + xkey.space
-        return self._unfoldedAPR[nth][xkey.segno]
+        try:
+            uf = self._unfoldedAPR[nth][xkey.segno]
+        except TypeError:
+            self._unfoldAPR(now=True)
+            uf = self._unfoldedAPR[nth][xkey.segno]
+        return uf
 
     def _putapr(self, xkey, apr):
         """xkey should be unfolded; this puts the apr to BOTH places"""
         unfoldednth = (xkey.mode * 2) + xkey.space
+        # note that a putapr can only happen after a get, so the
+        # unfoldedAPR is known to be unfolded already here
         self._unfoldedAPR[unfoldednth][xkey.segno] = list(apr)
-
         foldednth = (xkey.mode * 2) + self._foldspaces(xkey.mode, xkey.space)
         self.APR[foldednth][xkey.segno] = list(apr)
 
