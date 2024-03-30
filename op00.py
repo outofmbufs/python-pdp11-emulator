@@ -185,7 +185,7 @@ def op00_60_ror(cpu, inst, opsize=2):
 
     cpu.psw_n = val & signmask
     cpu.psw_z = (val == 0)
-    cpu.psw_v = cpu.psw_n ^ cpu.psw_c
+    cpu.psw_v = bool(cpu.psw_n) != bool(cpu.psw_c)
 
     cpu.operandx(xb6, val, opsize=opsize)
 
@@ -199,7 +199,7 @@ def op00_61_rol(cpu, inst, opsize=2):
 
     cpu.psw_n = val & signmask
     cpu.psw_z = (val == 0)
-    cpu.psw_v = cpu.psw_n ^ cpu.psw_c
+    cpu.psw_v = bool(cpu.psw_n) != bool(cpu.psw_c)
 
     cpu.operandx(xb6, val, opsize=opsize)
 
@@ -213,7 +213,7 @@ def op00_62_asr(cpu, inst, opsize=2):
     val |= signbit
     cpu.psw_n = (val & cpu.SIGN816[opsize])
     cpu.psw_z = (val == 0)
-    cpu.psw_v = cpu.psw_n ^ cpu.psw_c
+    cpu.psw_v = bool(cpu.psw_n) != bool(cpu.psw_c)
     cpu.operandx(xb6, val, opsize=opsize)
 
 
@@ -224,7 +224,7 @@ def op00_63_asl(cpu, inst, opsize=2):
     val = (val << 1) & cpu.MASK816[opsize]
     cpu.psw_n = (val & cpu.SIGN816[opsize])
     cpu.psw_z = (val == 0)
-    cpu.psw_v = cpu.psw_n ^ cpu.psw_c
+    cpu.psw_v = bool(cpu.psw_n) != bool(cpu.psw_c)
     cpu.operandx(xb6, val, opsize=opsize)
 
 
