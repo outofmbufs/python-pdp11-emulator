@@ -195,16 +195,9 @@ def op074_xor(cpu, inst):
 
 def op077_sob(cpu, inst):
     srcreg = (inst & 0o000700) >> 6
-    r = cpu.r[srcreg]
+    r = (cpu.r[srcreg] - 1) & 0xffff
 
-    if r == 1:
-        r = 0
-    else:
-        if r > 0:
-            r -= 1
-        else:
-            r = 0o177777    # 0 means max, that's how SOB is defined
-
+    if r != 0:
         # technically if this instruction occurs low enough in memory
         # this PC subtraction could wrap, so be technically correct & mask
         cpu.r[cpu.PC] = (cpu.r[cpu.PC] - 2 * (inst & 0o077)) & cpu.MASK16
