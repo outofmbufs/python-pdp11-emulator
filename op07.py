@@ -154,7 +154,7 @@ def _shifter(cpu, value, shift, *, opsize):
         cpu.psw_n = vsign
         cpu.psw_z = (value == 0)
         cpu.psw_v = 0
-        # C is not altered
+        cpu.psw_c = 0
         return value
     elif shift > 31:       # right shift
         # sign extend if appropriate, so the sign propagates
