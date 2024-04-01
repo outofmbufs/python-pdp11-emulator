@@ -25,9 +25,7 @@
 # Trivial TCP server that accepts connections on port 1170 (cute)
 # and simply proxies character traffic back and forth.
 #
-import sys
 import socket
-import time
 import threading
 import queue
 
