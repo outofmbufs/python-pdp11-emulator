@@ -157,7 +157,7 @@ class MMIO:
         self.device_resets = set()
 
     # the default entry for unoccupied I/O: cause an AddressError trap
-    def __nodev(self, addr, value=None, /):
+    def __nodev(self, addr, value=None, opsize=1):
         self.cpu.logger.info(f"Access to non-existent I/O {oct(addr)}")
         raise PDPTraps.AddressError(
             cpuerr=self.cpu.CPUERR_BITS.UNIBUS_TIMEOUT)
