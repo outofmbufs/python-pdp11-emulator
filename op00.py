@@ -263,7 +263,7 @@ def op00_65_mfpi(cpu, inst, opsize=2):
         pival = cpu.stackpointers[prvm]
     else:
         pival = cpu.operandx(inst & 0o77, altmode=prvm, altspace=space)
-    cpu.psw_n = pival & cpu.MASK16
+    cpu.psw_n = pival & cpu.SIGN16
     cpu.psw_z = (pival == 0)
     cpu.psw_v = 0
     cpu.stackpush(pival)
