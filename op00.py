@@ -285,7 +285,7 @@ def op00_66_mtpi(cpu, inst, opsize=2):
     targetspace = (cpu.mmu.DSPACE, cpu.mmu.ISPACE)[opsize - 1]
     w = cpu.stackpop()
 
-    cpu.psw_n = w & cpu.MASK16
+    cpu.psw_n = w & cpu.SIGN16
     cpu.psw_z = (w == 0)
     cpu.psw_v = 0
 
