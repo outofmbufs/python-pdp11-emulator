@@ -366,13 +366,13 @@ class TestMethods(unittest.TestCase):
             (0o200, 0o200, True, False, True, True),
             (0o377, 1, False, False, False, True),
             (0o400, 0o400, False, True, False, False),
-            (0o401, 0o777, True, False, False, True)
+            (0o401, 0o777, True, False, False, True),
         )
 
         p = self.make_pdp()
         instloc = 0o4000
         a = InstructionBlock()
-        a.neg('r0')
+        a.negb('r0')
         a.halt()
         self.loadphysmem(p, a, instloc)
         for r0_in, r0_out, n, z, v, c in testvectors:
