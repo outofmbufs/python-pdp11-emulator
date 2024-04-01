@@ -332,6 +332,59 @@ class TestMethods(unittest.TestCase):
         self.assertEqual(p.r[0], loopcount)
         self.assertEqual(p.r[1], 0)
 
+    def test_neg(self):
+        # test results verified with SIMH
+        # r0 test value, r0 result value, n, z, v, c
+        testvectors = (
+            (0, 0, False, True, False, False),
+            (1, 0o177777, True, False, False, True),
+            (0o100000, 0o100000, True, False, True, True),
+            (0o177777, 1, False, False, False, True))
+
+        p = self.make_pdp()
+        instloc = 0o4000
+        a = InstructionBlock()
+        a.neg('r0')
+        a.halt()
+        self.loadphysmem(p, a, instloc)
+        for r0_in, r0_out, n, z, v, c in testvectors:
+            with self.subTest(r0_in=r0_in):
+                p.r[0] = r0_in
+                p.run(pc=instloc)
+                self.assertEqual(p.r[0], r0_out)
+                self.assertEqual(bool(p.psw_n), n)
+                self.assertEqual(bool(p.psw_z), z)
+                self.assertEqual(bool(p.psw_v), v)
+                self.assertEqual(bool(p.psw_c), c)
+
+    def test_negb(self):
+        # test results verified with SIMH
+        # r0 test value, r0 result value, n, z, v, c
+        testvectors = (
+            (0, 0, False, True, False, False),
+            (1, 0o377, True, False, False, True),
+            (0o200, 0o200, True, False, True, True),
+            (0o377, 1, False, False, False, True),
+            (0o400, 0o400, False, True, False, False),
+            (0o401, 0o777, True, False, False, True)
+        )
+
+        p = self.make_pdp()
+        instloc = 0o4000
+        a = InstructionBlock()
+        a.neg('r0')
+        a.halt()
+        self.loadphysmem(p, a, instloc)
+        for r0_in, r0_out, n, z, v, c in testvectors:
+            with self.subTest(r0_in=r0_in):
+                p.r[0] = r0_in
+                p.run(pc=instloc)
+                self.assertEqual(p.r[0], r0_out)
+                self.assertEqual(bool(p.psw_n), n)
+                self.assertEqual(bool(p.psw_z), z)
+                self.assertEqual(bool(p.psw_v), v)
+                self.assertEqual(bool(p.psw_c), c)
+
     # test BEQ and BNE (BNE was also tested in test_bne)
     def test_eqne(self):
         p = self.make_pdp()
