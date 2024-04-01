@@ -238,6 +238,12 @@ class PDP11InstructionAssembler:
     def dec(self, dst):
         return self._1op(0o005300, dst)
 
+    def neg(self, dst):
+        return self._1op(0o005400, dst)
+
+    def negb(self, dst):
+        return self._1op(0o105400, dst)
+
     def tst(self, dst):
         return self._1op(0o005700, dst)
 
