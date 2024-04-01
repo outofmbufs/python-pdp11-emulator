@@ -2051,6 +2051,7 @@ if __name__ == "__main__":
     parser.add_argument('-i', '--instruction', default=movr1r0, type=int)
     parser.add_argument('--nommu', action="store_true")
     parser.add_argument('--clr', action="store_true")
+    parser.add_argument('tests', nargs="*")
     args = parser.parse_args()
 
     if args.performance:
