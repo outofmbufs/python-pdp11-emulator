@@ -34,6 +34,8 @@
 # op076 is the commercial instruction set
 #
 
+from pdptraps import PDPTraps
+
 
 def op070_mul(cpu, inst):
     dstreg = (inst & 0o000700) >> 6
@@ -152,7 +154,7 @@ def _shifter(cpu, value, shift, *, opsize):
         cpu.psw_n = vsign
         cpu.psw_z = (value == 0)
         cpu.psw_v = 0
-        # C is not altered
+        cpu.psw_c = 0         # per 1981 PDP11 Processor Handbook
         return value
     elif shift > 31:       # right shift
         # sign extend if appropriate, so the sign propagates
@@ -195,16 +197,9 @@ def op074_xor(cpu, inst):
 
 def op077_sob(cpu, inst):
     srcreg = (inst & 0o000700) >> 6
-    r = cpu.r[srcreg]
+    r = (cpu.r[srcreg] - 1) & 0xffff
 
-    if r == 1:
-        r = 0
-    else:
-        if r > 0:
-            r -= 1
-        else:
-            r = 0o177777    # 0 means max, that's how SOB is defined
-
+    if r != 0:
         # technically if this instruction occurs low enough in memory
         # this PC subtraction could wrap, so be technically correct & mask
         cpu.r[cpu.PC] = (cpu.r[cpu.PC] - 2 * (inst & 0o077)) & cpu.MASK16
