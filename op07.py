@@ -34,6 +34,8 @@
 # op076 is the commercial instruction set
 #
 
+from pdptraps import PDPTraps
+
 
 def op070_mul(cpu, inst):
     dstreg = (inst & 0o000700) >> 6
