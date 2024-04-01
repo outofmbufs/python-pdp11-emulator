@@ -122,7 +122,7 @@ def op00_54_neg(cpu, inst, opsize=2):
 
     cpu.psw_n = newval & cpu.SIGN816[opsize]
     cpu.psw_z = (newval == 0)
-    cpu.psw_v = (val == newval)    # happens at the maximum negative value
+    cpu.psw_v = 1 if (val == 0o200 and opsize == 1) or (val == 0o100000 and opsize == 2) else 0
     cpu.psw_c = (newval != 0)
 
     cpu.operandx(xb6, newval, opsize=opsize)
