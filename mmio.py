@@ -157,13 +157,14 @@ class MMIO:
         self.device_resets = set()
 
     # the default entry for unoccupied I/O: cause an AddressError trap
-    def __nodev(self, addr, value=None, /):
+    def __nodev(self, addr, value=None, /, *, opsize=2):
         self.cpu.logger.info(f"Access to non-existent I/O {oct(addr)}")
         raise PDPTraps.AddressError(
             cpuerr=self.cpu.CPUERR_BITS.UNIBUS_TIMEOUT)
 
     # Devices may have simple "dummy" I/O addresses that always read zero
     # and ignore writes; See "if iofunc is None" in register() method.
+    # NOTE: register() byteme-wraps this so opsize not needed.
     def __ignoredev(self, addr, value=None, /):
         self.cpu.logger.debug(f"dummy zero device @ {oct(addr)}, {value=}")
         return 0
