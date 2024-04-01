@@ -34,6 +34,8 @@
 # op076 is the commercial instruction set
 #
 
+from pdptraps import PDPTraps
+
 
 def op070_mul(cpu, inst):
     dstreg = (inst & 0o000700) >> 6
@@ -152,7 +154,7 @@ def _shifter(cpu, value, shift, *, opsize):
         cpu.psw_n = vsign
         cpu.psw_z = (value == 0)
         cpu.psw_v = 0
-        # C is not altered
+        cpu.psw_c = 0         # per 1981 PDP11 Processor Handbook
         return value
     elif shift > 31:       # right shift
         # sign extend if appropriate, so the sign propagates
