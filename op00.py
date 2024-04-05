@@ -96,7 +96,7 @@ def op00_52_inc(cpu, inst, opsize=2):
 
     cpu.psw_n = newval & cpu.SIGN816[opsize]
     cpu.psw_z = (newval == 0)
-    cpu.psw_v = (newval == cpu.SIGN816)
+    cpu.psw_v = (newval == cpu.SIGN816[opsize])
     # C bit not affected
     cpu.operandx(xb6, newval, opsize=opsize)
 
