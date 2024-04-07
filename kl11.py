@@ -123,14 +123,23 @@ class KL11:
                         self.ub.intmgr.simple_irq(pri=4, vector=0o64)
 
             # transmit buffer
-            case 6 if value is not None:              # tbuf
-                # *** WRITING ***
-                value &= 0o177
-                if (value != 0o177):
-                    s = chr(value)
-                    self.tq.put(s)
-                if self.t_ienable:
-                    self.ub.intmgr.simple_irq(pri=4, vector=0o64)
+            case 6:
+                if value is None:
+                    # *** READING ***
+                    # manual says this is load-only; however automatic
+                    # byte write support (byteme/mmio) requires this
+                    # be readable. Probably byteme should be fixed instead
+                    # to catch traps from unreadables and synthesize
+                    # a zero there (?)
+                    value = 0
+                else:
+                    # *** WRITING ***
+                    value &= 0o177
+                    if (value != 0o177):
+                        s = chr(value)
+                        self.tq.put(s)
+                    if self.t_ienable:
+                        self.ub.intmgr.simple_irq(pri=4, vector=0o64)
             case _:
                 raise PDPTraps.AddressError
 
