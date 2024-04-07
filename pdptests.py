@@ -24,6 +24,7 @@ from types import SimpleNamespace
 
 import breakpoints as BKP
 from machine import PDP1170
+from kl11 import KL11
 from branches import BRANCH_CODES
 from pdptraps import PDPTraps
 import unittest
@@ -1694,6 +1695,22 @@ class TestMethods(unittest.TestCase):
         for i, val in enumerate(expected_7000):
             with self.subTest(i=i, val=val):
                 self.assertEqual(val, p.physmem[recbase + i])
+
+    def test_kl11_bytewrite(self):
+        # Test for
+        #    https://github.com/outofmbufs/python-pdp11-emulator/issues/14
+        # byte writes to KL11 transmit buffer need to work.
+        p = self.make_pdp()
+        p.associate_device(KL11(p.ub), 'KL')    # console
+        startaddr = 0o4000
+        a = InstructionBlock()
+        a.clr('r0')                     # will be incremented to show success
+        a.movb(13, a.ptr(0o177566))
+        a.inc('r0')                     # r0 will be 1 if the movb worked
+        a.halt()
+        self.loadphysmem(p, a, startaddr)
+        p.run(pc=startaddr)
+        self.assertEqual(p.r[0], 1)
 
     def test_breakpoints1(self):
         # test the steps=N breakpoint capability
