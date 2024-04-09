@@ -1696,6 +1696,17 @@ class TestMethods(unittest.TestCase):
             with self.subTest(i=i, val=val):
                 self.assertEqual(val, p.physmem[recbase + i])
 
+    def test_physrw_n(self):
+        p = self.make_pdp()
+        words = [1, 2, 3, 0, 0o40000, 65534]
+        addr = 0o10000
+        p.physRW_N(addr, len(words), words)
+        for i, w in enumerate(words):
+            self.assertEqual(p.physmem[(addr >> 1) + i], w)
+
+        with self.assertRaises(PDPTraps.AddressError):
+            p.physRW_N(addr+1, len(words), words)
+
     def test_kl11_bytewrite(self):
         # Test for
         #    https://github.com/outofmbufs/python-pdp11-emulator/issues/14
