@@ -304,7 +304,7 @@ class PDP11:
         """Like physRW but for nwords at a time."""
 
         if (physaddr & 1):
-            raise PDPTraps.AddressError(cpuerr=self.cpu.CPUERR_BITS.ODDADDR)
+            raise PDPTraps.AddressError(cpuerr=self.CPUERR_BITS.ODDADDR)
         physaddr >>= 1          # physical mem is an array of WORDs
 
         try:
