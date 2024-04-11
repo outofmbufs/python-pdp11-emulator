@@ -30,6 +30,7 @@ import threading
 import queue
 
 from pdptraps import PDPTraps
+from unibus import BusCycle
 
 
 class KL11:
@@ -46,9 +47,9 @@ class KL11:
     SERVERPORT = 1170
 
     def __init__(self, ub, baseaddr=KL11_DEFAULT):
+        self.addr = baseaddr
         self.ub = ub
-        self.addr = ub.mmio.register(self.klregs, baseaddr, 4)
-        ub.mmio.devicereset_register(self.reset)
+        self.ub.register(ub.autobyte(self.klregs), baseaddr, 4)
 
         # output characters are just queued (via tq) to the output thread
         # input characters have to undergo a more careful 1-by-1
@@ -70,18 +71,16 @@ class KL11:
         self._t = threading.Thread(target=self._connectionserver, daemon=True)
         self._t.start()
 
-    def reset(self, ub):
-        """Called for UNIBUS resets (RESET instruction)."""
-        self.rcdone = False
-        self.r_ienable = False
-        self.r_tenable = False
+    def klregs(self, addr, cycle, /, *, value=None):
+        if cycle == BusCycle.RESET:
+            self.rcdone = False
+            self.r_ienable = False
+            self.r_tenable = False
+            return
 
-    def klregs(self, addr, value=None, /):
         match addr - self.addr:
             case 0:              # rcsr
-                if value is None:
-                    # *** READING ***
-
+                if cycle == BusCycle.READ16:
                     value = 0
 
                     if self.r_ienable:
@@ -90,8 +89,7 @@ class KL11:
                     if self.rcdone:
                         value |= self.RCDONE
 
-                else:
-                    # *** WRITING ***
+                elif cycle == BusCycle.WRITE16:
                     if value & self.RDRENA:
                         with self.rxc:
                             # a request to get one character, which only
@@ -101,8 +99,7 @@ class KL11:
                             self.r_ienable = (value & self.IENABLE)
                             self.rxc.notify()
 
-            case 2 if value is None:         # rbuf
-                # *** READING ***
+            case 2 if cycle == BusCycle.READ16:         # rbuf
                 with self.rxc:
                     value = self.rdrbuf
                     self.rcdone = False
@@ -110,36 +107,24 @@ class KL11:
 
             # transmit buffer status (sometimes called tcsr)
             case 4:
-                if value is None:
-                    # *** READING ***
+                if cycle == BusCycle.READ16:
                     value = self.TXRDY      # always ready to send chars
                     if self.t_ienable:
                         value |= self.IENABLE
-                else:
-                    # *** WRITING ***
+                elif cycle == BusCycle.WRITE16:
                     prev = self.t_ienable
                     self.t_ienable = (value & self.IENABLE)
                     if self.t_ienable and not prev:
                         self.ub.intmgr.simple_irq(pri=4, vector=0o64)
 
             # transmit buffer
-            case 6:
-                if value is None:
-                    # *** READING ***
-                    # manual says this is load-only; however automatic
-                    # byte write support (byteme/mmio) requires this
-                    # be readable. Probably byteme should be fixed instead
-                    # to catch traps from unreadables and synthesize
-                    # a zero there (?)
-                    value = 0
-                else:
-                    # *** WRITING ***
-                    value &= 0o177
-                    if (value != 0o177):
-                        s = chr(value)
-                        self.tq.put(s)
-                    if self.t_ienable:
-                        self.ub.intmgr.simple_irq(pri=4, vector=0o64)
+            case 6 if cycle == BusCycle.WRITE16:              # tbuf
+                value &= 0o177
+                if (value != 0o177):
+                    s = chr(value)
+                    self.tq.put(s)
+                if self.t_ienable:
+                    self.ub.intmgr.simple_irq(pri=4, vector=0o64)
             case _:
                 raise PDPTraps.AddressError
 

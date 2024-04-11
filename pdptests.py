@@ -24,13 +24,16 @@ from types import SimpleNamespace
 
 import breakpoints as BKP
 from machine import PDP1170
+from unibus import BusCycle
 from kl11 import KL11
 from branches import BRANCH_CODES
 from pdptraps import PDPTraps
 import unittest
 import random
 import os
+import io
 import hashlib
+import boot
 
 from pdpasmhelper import InstructionBlock
 
@@ -1696,6 +1699,35 @@ class TestMethods(unittest.TestCase):
             with self.subTest(i=i, val=val):
                 self.assertEqual(val, p.physmem[recbase + i])
 
+    # test loading the LDA format (absolute tape loader)
+    def test_load_lda(self):
+        p = self.make_pdp()
+        ldabytes = [
+            0, 0, 0,           # testing zero skip
+            1, 0, 9, 0, 0, 8,  # address 0x800 (2k)
+            1, 2, 3,           # the data
+            232,               # checksum
+
+            0, 0, 0, 0, 0,     # more zero skip testing
+            1, 0, 9, 0, 3, 8,  # address 0x803 (2k)
+            4, 5, 6,           # the data
+            220,               # checksum
+            1, 0, 9, 0, 6, 8,  # testing lack of zero skip
+            7, 8, 9,
+            208,
+
+            # the END block
+            1, 0, 6, 0, 1, 1, 247
+        ]
+        with io.BytesIO(bytes(ldabytes)) as f:
+            addr = boot.load_lda_f(p, f)
+            self.assertEqual(addr, 257)    # just "known" from data above
+            # this range of addresses and the related data is just "known"
+            # from the data bytes above
+            baseaddr = 0x800
+            for offset in range(9):
+                self.assertEqual(p.mmu.byteRW(baseaddr+offset), offset+1)
+
     def test_physrw_n(self):
         p = self.make_pdp()
         words = [1, 2, 3, 0, 0o40000, 65534]
@@ -1722,6 +1754,79 @@ class TestMethods(unittest.TestCase):
         self.loadphysmem(p, a, startaddr)
         p.run(pc=startaddr)
         self.assertEqual(p.r[0], 1)
+
+    def test_io(self):
+        # unibus I/O callback tests
+
+        p = self.make_pdp()
+        # this callback just records arguments taking advantage of closure
+        cbx = SimpleNamespace(value=0, arglog=[])
+
+        RESET_VALUE = 1234                     # arbitrary
+
+        def callback(ioaddr, cycle, /, **kwargs):
+            if len(kwargs) == 0:
+                cbx.arglog.append((ioaddr, cycle))
+            elif len(kwargs) == 1:
+                cbx.arglog.append((ioaddr, cycle, kwargs['value']))
+            else:
+                raise ValueError("invalid kwargs")
+            if cycle == BusCycle.READ16:
+                return cbx.value
+            elif cycle == BusCycle.RESET:
+                cbx.value = RESET_VALUE
+            elif cycle == BusCycle.WRITE16:
+                cbx.value = kwargs['value']
+            elif cycle == BusCycle.WRITE8:
+                v = kwargs['value'] & 0xFF
+                if ioaddr & 1:
+                    cbx.value = (cbx.value & 0x00FF) | (v << 8)
+                else:
+                    cbx.value = (cbx.value & 0xFF00) | v
+            else:
+                assert False, "bad cycle"
+
+        startaddr = 0o4000
+        ioaddr = 0o177720        # arbitrary; in a "reserved" block fwiw
+        a = InstructionBlock()
+        a.mov(startaddr, 'sp')
+        a.mov(ioaddr, 'r5')
+        a.literal(5)                   # RESET instruction
+        a.mov('(r5)', 'r0')            # expect r0 to be the RESET_VALUE
+        a.mov(1, '(r5)')               # set new value to 1
+        a.mov('(r5)', 'r1')            # expect r1 to be 1
+        a.mov(0o400, '(r5)')           # setting a bit in the high byte
+        a.movb(2, '(r5)')              # should only set the low part
+        a.mov('(r5)', 'r2')            # expect r2 to be 0o402
+        a.movb(0, '1(r5)')             # should only clear the high part
+        a.mov('(r5)', 'r3')            # expect r3 to be 2
+        a.halt()
+        self.loadphysmem(p, a, startaddr)
+
+        p.ub.register(callback, ioaddr & 8191)
+        p.run(pc=startaddr)
+        # per the various comments in the test sequence above
+        self.assertEqual(p.r[0], RESET_VALUE)
+        self.assertEqual(p.r[1], 1)
+        self.assertEqual(p.r[2], 0o402)
+        self.assertEqual(p.r[3], 2)
+
+        # the sequence of arguments expected in the log - determined
+        # by inspection when the test code was created
+        offs = ioaddr & 8191
+        gold = (
+            (offs, BusCycle.RESET),           # from the RESET instruction
+            (offs, BusCycle.READ16),          # from mov (r5),r0
+            (offs, BusCycle.WRITE16, 1),      # from mov $1,(r5)
+            (offs, BusCycle.READ16),          # from mov (r5),r1
+            (offs, BusCycle.WRITE16, 0o400),  # from mov $0400,(r5)
+            (offs, BusCycle.WRITE8, 2),       # from the movb
+            (offs, BusCycle.READ16),          # from mov (r5),r2
+            (offs+1, BusCycle.WRITE8, 0),     # from the movb
+            (offs, BusCycle.READ16),          # from mov (r5),r3
+            )
+        for i, t in enumerate(cbx.arglog):
+            self.assertEqual(t, gold[i])
 
     def test_breakpoints1(self):
         # test the steps=N breakpoint capability
