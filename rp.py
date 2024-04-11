@@ -23,6 +23,7 @@
 # Emulate (a bare subset of) RP04..07 RM02-80 disks
 
 from types import SimpleNamespace
+from unibus import BusCycle
 
 
 class RPRM:
@@ -83,11 +84,10 @@ class RPRM:
 
             # CS1 is a special case in several ways
             if attr == 'CS1':
-                ub.mmio.register(self.rw_cs1, baseoffs+offs, 1,
-                                 byte_writes=True, reset=True)
+                ub.register(self.rw_cs1, baseoffs+offs)
             else:
                 # the rest are simple attributes; some as properties
-                ub.mmio.register_simpleattr(self, attr, baseoffs+offs)
+                ub.register_simpleattr(self, attr, baseoffs+offs)
 
         # XXX obviously this is just fake for now
         self.DS = (self.HPDS_BITS.DPR | self.HPDS_BITS.MOL |
@@ -133,13 +133,7 @@ class RPRM:
 
     @property
     def CS1(self):
-        # XXX what if CS1 is just always RDY??
-        self._cs1 |= self.HPCS1_BITS.RDY
-
-        # --- XXX DEBUGGING XXX ---
-        if (self._cs1 & 0x4000):
-            self.logger.debug(f"RP: XXX! CS1={oct(self._cs1)}")
-        self.logger.debug(f"RP: reading CS1: {oct(self._cs1)}")
+        self._cs1 |= self.HPCS1_BITS.RDY    # CS1 is just always RDY
         return self._cs1
 
     @CS1.setter
@@ -199,12 +193,10 @@ class RPRM:
 
     # special function for handling writes to the CS1 attribute
     # Because byte writes to the upper byte need to be treated carefully
-    def rw_cs1(self, addr, value=None, /, *, opsize=2):
+    # and need to handle RESET
+    def rw_cs1(self, addr, cycle, /, *, value=None):
 
-        if opsize == 1:
-            # by definition byte reads are impossible; this will obviously
-            # bomb out if they happen somehow (it is physically impossible
-            # to have a byte write on the real UNIBUS)
+        if cycle == BusCycle.WRITE8:
             value &= 0o377          # paranoia but making sure
             self.logger.debug(f"RP: BYTE addr={oct(addr)}, "
                               f"{value=}, _cs1={oct(self._cs1)}")
@@ -213,10 +205,14 @@ class RPRM:
                 self._cs1 = (value << 8) | (self._cs1 & 0o377)
             else:
                 self.CS1 = (self._cs1 & 0o177400) | value
-        elif value is None:
+        elif cycle == BusCycle.READ16:
             return self.CS1          # let property getter do its thing
-        else:
+        elif cycle == BusCycle.RESET:
+            self.CS1 = 0
+        elif cycle == BusCycle.WRITE16:
             self.CS1 = value         # let property setter do its thing
+        else:
+            assert False, "not reached or unknown cycle"
         return None
 
     def _compute_offset(self):
