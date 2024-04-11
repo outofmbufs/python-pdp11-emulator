@@ -236,7 +236,7 @@ def boot_lda(p, fname, /, *, force_run=True):
     code eventually halts.
     """
     with open(fname, 'rb') as f:
-        addr = rawaddr = load_lda_f(f)
+        addr = rawaddr = load_lda_f(p, f)
 
     if rawaddr & 1:
         if not force_run:
