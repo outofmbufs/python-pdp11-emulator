@@ -117,14 +117,25 @@ def boot_bin(p, fname, /, *, addr=0, deposit_only=False,
     return addr if deposit_only else None
 
 
-def _must_read_n(f, n):
-    """read exactly n bytes from f; raise exception if can't. n==0 allowed."""
+def _must_read_n(f, n, zeroskip=False):
+    """read exactly n bytes from f; raise exception if can't. n==0 allowed.
 
-    if n == 0:         # read(0) works but feels dirty
-        return bytes()
-    b = f.read(n)
-    if len(b) != n:
-        raise ValueError(f"needed {n} bytes; got {len(b)}")
+    If zeroskip is True (default: False), zero bytes will be discarded.
+    It is not legal to zeroskip with n == 0.
+    """
+
+    if zeroskip and n == 0:
+        raise ValueError("zeroskip and n == 0")
+
+    b = bytes()
+    if n > 0:
+        while zeroskip and (b := f.read(1)) == b'\00':
+            pass
+
+        # b has one byte or none in it, depending on zeroskip
+        b += f.read(n - len(b))
+        if len(b) != n:
+            raise ValueError(f"needed {n} bytes; got {len(b)}")
     return b
 
 
@@ -138,23 +149,30 @@ def _byte_phys_write(p, b, addr):
         b = bytes([p.physRW(addr) & 255]) + b
     if len(b) & 1:
         b += bytes([(p.physRW(addr+len(b)-1) >> 8) & 255])
-        
+
     words = [(b[i+1] << 8) | b[i] for i in range(0, len(b), 2)]
     p.physRW_N(addr, len(words), words)
 
 
 def load_lda_f(p, f):
-    """Read open file f as an 'absolute loader' (.LDA, sometimes .BIC) file
-    This is the same format that simh defines for its load (binary) command.
+    """Read  and load open file f as an 'absolute loader' file
+    (.LDA, sometimes .BIC file). This is the same format that simh
+    defines for its load (binary) command.
 
     Returns: the address specified in the END block (per LDA docs)
 
     Any file format errors or I/O errors will raise an exception.
     """
 
-    # An LDA/BIC/absolute loader file may start with an arbitrary number
-    # of zero bytes (possible w/paper tape). Any leading zero bytes will be
-    # ignored. After that it should be repeated blocks:
+    # Archived DEC documentation says an LDA/absolute loader file may start
+    # with an arbitrary number of zero bytes. SIMH says that ANY block
+    # (not just the first) may have arbitrary zeros in front of it, and
+    # testing reveals that SIMH indeed allows (ignores) such zeros.
+    #
+    # Such zeros were probably more common in the (real) paper tape days.
+    # They are supported here simply because SIMH does too.
+    #
+    # The file is a sequence of blocks in header/data/checksum format:
     #   [HEADER]          -- 6 bytes
     #   [DATA]            -- size determined by header, can be zero length
     #   [CHECKSUM]        -- 1 byte
@@ -167,6 +185,9 @@ def load_lda_f(p, f):
     #       addr-lsb        -- lower 8 bits of address
     #       addr-msb        -- upper 8 bits of address
     #
+    # As mentioned, runs of zeros in prior to such a header (which starts
+    # with a 1) are ignored.
+    #
     # The 'block length' includes the header bytes but not the checksum.
     # Thus the lengthof [DATA] is six less than the block length given.
     # Note that the [DATA] length is allowed to be odd, or zero.
@@ -175,12 +196,8 @@ def load_lda_f(p, f):
     # an "END" block that terminates the format. The address indicated
     # is the "start address" and is returned.
 
-    while (header := _must_read_n(f, 1)) == 0:
-        pass
-
-    header += _must_read_n(f, 5)     # form the rest of the first header
-
     while True:
+        header = _must_read_n(f, 6, zeroskip=True)
         if header[0] != 1:
             raise ValueError(f"header starts with {header[0]} not 1")
 
@@ -196,13 +213,13 @@ def load_lda_f(p, f):
         if (sum(header) + sum(b) + sum(chksum)) & 0xFF:
             raise ValueError(f"checksum mismatch, {header=}")
 
-        if count == 6:
+        if count == 6:         # END block with no data
             return addr
 
         _byte_phys_write(p, b, addr)
-        header = _must_read_n(f, 6)
 
     assert False, "unreachable"
+
 
 def boot_lda(p, fname, /, *, force_run=True):
     """Load and boot an LDA/BIC/absolute-loader file.
@@ -228,7 +245,7 @@ def boot_lda(p, fname, /, *, force_run=True):
 
     p.run(pc=addr)
     return rawaddr
-    
+
 
 def make_unix_machine(*, loglevel='INFO', drivenames=[]):
     p = PDP1170(loglevel=loglevel)
