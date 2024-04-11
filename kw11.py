@@ -41,7 +41,7 @@ class KW11:
             target=self._cloop, args=(1/HZ, ub.intmgr), daemon=True)
         self.interrupts_enabled = False
         self.monbit = 1       # the manual says this starts as 1
-        ub.mmio.register_simpleattr(self, 'LKS', self.KW11_OFFS, reset=True)
+        ub.register_simpleattr(self, 'LKS', self.KW11_OFFS, reset=True)
         self._t.start()
 
     # clock loop

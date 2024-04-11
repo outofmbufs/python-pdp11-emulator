@@ -28,7 +28,6 @@
 #   are focused around helping to create hand-constructed test code.
 #
 
-from contextlib import AbstractContextManager
 from branches import BRANCH_CODES
 from collections import defaultdict
 from functools import partial
@@ -239,6 +238,12 @@ class PDP11InstructionAssembler:
     def dec(self, dst):
         return self._1op(0o005300, dst)
 
+    def neg(self, dst):
+        return self._1op(0o005400, dst)
+
+    def negb(self, dst):
+        return self._1op(0o105400, dst)
+
     def tst(self, dst):
         return self._1op(0o005700, dst)
 
@@ -429,7 +434,10 @@ class InstructionBlock(PDP11InstructionAssembler):
             # IF it starts with '+' it means use PC-relative addr mode
             # which will require some fussing around...
             if operand_token[0] == '+':
-                return [0o67, self.getlabel(operand_token[1:], idxrel=True, idxadj=4)]
+                return [0o67,
+                        self.getlabel(
+                            operand_token[1:], idxrel=True, idxadj=4)
+                        ]
             else:
                 return [0o27, self.getlabel(operand_token)]
 
@@ -595,7 +603,8 @@ class InstructionBlock(PDP11InstructionAssembler):
 
         # labels become operand mode 0o67 ... PC-relative w/offset
         inst = 0o000167
-        return self._seqwords([inst, self.getlabel(dst, idxrel=True, idxadj=4)])
+        return self._seqwords(
+            [inst, self.getlabel(dst, idxrel=True, idxadj=4)])
 
     def sob(self, reg, target):
         # the register can be a naked integer 0 .. 5 or an 'r' string
@@ -643,9 +652,6 @@ class InstructionBlock(PDP11InstructionAssembler):
             f.write(f"D PC {oct(startaddr)[2:]}\n")
 
 
-
-
-
 if __name__ == "__main__":
     import unittest
 
@@ -680,7 +686,6 @@ if __name__ == "__main__":
 
             insts = list(a)
             self.assertEqual(list(a), [0o012700, 6, 0o005001, 0o012701, 6])
-
 
         def test_labelmath_dot(self):
             a = InstructionBlock()

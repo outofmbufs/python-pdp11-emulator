@@ -38,11 +38,6 @@ from op4 import op4_dispatch_table
 # monolithic/large class file seemed less than ideal. Python does not
 # allow multiple files for a single class.
 #
-# Some parts of the implementation, like mmu and mmio, and various devices,
-# made sense as separate component classes. The opcodes, however, are
-# basically additional methods in separate files. Since they are not real
-# methods they get passed a "cpu" argument manually instead of "self".
-#
 # Was there a better way? Just give in and have one huge file??
 #
 # The opcode parsing/dispatch starts with the top 4 bits of the opcode;
@@ -248,7 +243,7 @@ class PDP11:
                                ('systemID', self.SYSTEMID_OFFS),
                                ('error_register', self.CPUERROR_OFFS),
                                ('logging_hack', self.LOGGING_OFFS)):
-            self.ub.mmio.register_simpleattr(self, attrname, offs)
+            self.ub.register_simpleattr(self, attrname, offs)
 
         # console switches (read) and blinken lights (write)
         self.swleds = 0
@@ -304,7 +299,7 @@ class PDP11:
         """Like physRW but for nwords at a time."""
 
         if (physaddr & 1):
-            raise PDPTraps.AddressError(cpuerr=self.cpu.CPUERR_BITS.ODDADDR)
+            raise PDPTraps.AddressError(cpuerr=self.CPUERR_BITS.ODDADDR)
         physaddr >>= 1          # physical mem is an array of WORDs
 
         try:
@@ -326,7 +321,7 @@ class PDP11:
     #
     #       device_instance = XYZ11(p.ub)
     #
-    # The device __init__ will typically use ub.mmio.register to connect up
+    # The device __init__ will typically use ub.register to connect up
     # to its UNIBUS addresses. That's all that needs to happen.
     #
     # Nevertheless, on general principles, it seems like the pdp instance
@@ -826,9 +821,9 @@ class PDP1170(PDP11):
         self.r = self.registerfiles[self.psw_regset]
 
         # how the registers appear in IOPAGE space
-        self.ub.mmio.register(self._ioregsets,
-                              self.IOPAGE_REGSETS_OFFS,
-                              self.IOPAGE_REGSET_SIZE)
+        self.ub.register(self._ioregsets,
+                         self.IOPAGE_REGSETS_OFFS,
+                         self.IOPAGE_REGSET_SIZE)
 
     @property
     def r_alt(self):

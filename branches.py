@@ -42,9 +42,6 @@ BRANCH_CODES = {
     'blos': 0o101400
 }
 
-# There are some duplicates and they are chosen arbitrarily by this:
-BRANCH_NAMES = {v: k for k, v in BRANCH_CODES.items()}
-
 
 # keyed by masked "base code" (upper byte), not shifted
 _brconds = {

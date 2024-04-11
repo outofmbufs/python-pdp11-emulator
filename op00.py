@@ -96,7 +96,7 @@ def op00_52_inc(cpu, inst, opsize=2):
 
     cpu.psw_n = newval & cpu.SIGN816[opsize]
     cpu.psw_z = (newval == 0)
-    cpu.psw_v = (newval == cpu.SIGN816)
+    cpu.psw_v = (newval == cpu.SIGN816[opsize])
     # C bit not affected
     cpu.operandx(xb6, newval, opsize=opsize)
 
@@ -122,7 +122,7 @@ def op00_54_neg(cpu, inst, opsize=2):
 
     cpu.psw_n = newval & cpu.SIGN816[opsize]
     cpu.psw_z = (newval == 0)
-    cpu.psw_v = (val == newval)    # happens at the maximum negative value
+    cpu.psw_v = (val == newval) and (val != 0)  # happens at max neg value
     cpu.psw_c = (newval != 0)
 
     cpu.operandx(xb6, newval, opsize=opsize)
@@ -263,7 +263,7 @@ def op00_65_mfpi(cpu, inst, opsize=2):
         pival = cpu.stackpointers[prvm]
     else:
         pival = cpu.operandx(inst & 0o77, altmode=prvm, altspace=space)
-    cpu.psw_n = pival & cpu.MASK16
+    cpu.psw_n = pival & cpu.SIGN16
     cpu.psw_z = (pival == 0)
     cpu.psw_v = 0
     cpu.stackpush(pival)

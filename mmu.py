@@ -21,7 +21,8 @@
 # SOFTWARE.
 
 from functools import partial
-from pdptraps import PDPTraps
+from pdptraps import PDPTraps, PDPTrap
+from unibus import BusCycle
 from types import SimpleNamespace
 from collections import namedtuple
 
@@ -67,8 +68,6 @@ class MemoryMgmt:
 
         self.cpu = cpu
         self.ub = cpu.ub
-
-        mmio = self.ub.mmio
 
         # The "segment cache" dramatically speeds up address translation
         # for the most common MMU usage scenarios.
@@ -126,27 +125,27 @@ class MemoryMgmt:
                     (0, self.DSPACE, 48)):
                 ioaddr = base+offset
                 iofunc = partial(self.io_parpdr, parpdr, mode, space, ioaddr)
-                mmio.register(iofunc, ioaddr, 8)  # 8 words / 16 bytes
+                self.ub.register(iofunc, ioaddr, 8)  # 8 words / 16 bytes
 
         # register the simple attrs MMR0 etc into I/O space:
-        mmio.register_simpleattr(self, 'MMR0', self.MMR0_OFFS, reset=True)
-        mmio.register_simpleattr(self, 'MMR1', self.MMR1_OFFS)
-        mmio.register_simpleattr(self, 'MMR2', self.MMR2_OFFS)
-        mmio.register_simpleattr(self, 'MMR3', self.MMR3_OFFS, reset=True)
-        mmio.register_simpleattr(self, None, self.MCR_OFFS)
+        self.ub.register_simpleattr(self, 'MMR0', self.MMR0_OFFS, reset=True)
+        self.ub.register_simpleattr(self, 'MMR1', self.MMR1_OFFS)
+        self.ub.register_simpleattr(self, 'MMR2', self.MMR2_OFFS)
+        self.ub.register_simpleattr(self, 'MMR3', self.MMR3_OFFS, reset=True)
+        self.ub.register_simpleattr(self, None, self.MCR_OFFS)
 
-    def io_parpdr(self, parpdr, mode, space, base, addr, value=None, /):
-        """mmio I/O function for MMU PARs and PDRs.
+    def io_parpdr(self, parpdr, mode, space, base,
+                  addr, cycle, /, *, value=None):
+        """I/O function for MMU PARs and PDRs.
 
         NOTE: parpdr/mode/space/base args provided via partial() as
               supplied at registration time; see __init__.
-              The mmio module calls this simply as f(addr, value)
         """
         aprnum = (addr - base) >> 1
         aprfile = self.APR[(mode * 2) + space]
-        if value is None:
+        if cycle == BusCycle.READ16:
             return aprfile[aprnum][parpdr]
-        else:
+        elif cycle == BusCycle.WRITE16:
             # dump any matching cache entries in both reading/writing form.
             for reading in (True, False):
                 # the "space" is a dilemma because it is tied up in
@@ -504,7 +503,7 @@ class MemoryMgmt:
 
         pa = self.v2p(vaddr, mode, space, value is None, invis=_invis)
         if pa >= self.iopage_base:
-            return self.ub.mmio.wordRW(pa & self.cpu.IOPAGE_MASK, value)
+            return self.ub.wordRW(pa & self.cpu.IOPAGE_MASK, value)
         else:
             return self.cpu.physRW(pa, value)
 
@@ -541,7 +540,7 @@ class MemoryMgmt:
 
             pa &= ~1
             if pa >= self.iopage_base:
-                wv = self.ub.mmio.wordRW(pa & self.cpu.IOPAGE_MASK)
+                wv = self.ub.wordRW(pa & self.cpu.IOPAGE_MASK)
             else:
                 wv = self.cpu.physRW(pa)
             return ((wv >> 8) if odd else wv) & 0o377
@@ -556,7 +555,7 @@ class MemoryMgmt:
             # Memory byte writes are synthesized.
 
             if pa >= self.iopage_base:
-                return self.ub.mmio.byteRW(pa & self.cpu.IOPAGE_MASK, value)
+                return self.ub.byteRW(pa & self.cpu.IOPAGE_MASK, value)
             else:
                 wv = self.cpu.physRW(pa & ~1)
                 if odd:

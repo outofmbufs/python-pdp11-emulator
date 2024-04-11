@@ -40,6 +40,6 @@ class DC11:
     DC11_NDEVS = 4                   # four devices, each is 4 16-bit registers
 
     def __init__(self, ub, baseaddr=DC11_DEFAULT):
+        self.addr = self.DC11_DEFAULT
         self.ub = ub
-        self.addr = ub.mmio.register(
-            None, self.DC11_DEFAULT, self.DC11_NDEVS * 4)
+        self.ub.register(None, self.DC11_DEFAULT, self.DC11_NDEVS * 4)

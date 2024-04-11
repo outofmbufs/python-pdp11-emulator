@@ -10,6 +10,9 @@ It was fun.
 
 If you like it, great. If you think it is silly, so it goes.
 
+## ACKNOWLEDGEMENTS
+Special thanks to Folkert van Heusden (https://github.com/folkertvanheusden) for looking at the instructions (especially the condition code results) in detail and finding many bugs.
+
 ## MORE NOTES
 See NOTES file for running commentary on status, etc.
 
