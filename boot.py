@@ -221,6 +221,20 @@ def load_lda_f(p, f):
     assert False, "unreachable"
 
 
+def information_screen():
+    print("Starting PDP11; this window is NOT THE EMULATED PDP-11 CONSOLE.")
+    print("*** In another window, telnet/nc to localhost:1170 to connect.")
+    print("    Terminal should be in raw mode. On a mac, this is a good way:")
+    print("         (stty raw; nc localhost 1170; stty sane)")
+    print("")
+    print("There will be no prompt; type 'boot' in your OTHER window")
+    print("")
+    print("Then, at the ':' prompt, typically type: hp(0,0)unix")
+    print("")
+
+    input("Press enter to continue")
+
+
 def boot_lda(p, fname, /, *, force_run=True):
     """Load and boot an LDA/BIC/absolute-loader file.
 
@@ -243,6 +257,11 @@ def boot_lda(p, fname, /, *, force_run=True):
             return rawaddr
         addr = rawaddr - 1
 
+    if addr == 0:
+        addr = 0o200
+
+    information_screen()
+
     p.run(pc=addr)
     return rawaddr
 
@@ -262,14 +281,7 @@ def boot_unix(p, runoptions={}):
     # load, and execute, the key-in bootstrap
     boot_hp(p)
 
-    print("Starting PDP11; this window is NOT THE EMULATED PDP-11 CONSOLE.")
-    print("*** In another window, telnet/nc to localhost:1170 to connect.")
-    print("    Terminal should be in raw mode. On a mac, this is a good way:")
-    print("         (stty raw; nc localhost 1170; stty sane)")
-    print("")
-    print("There will be no prompt; type 'boot' in your OTHER window")
-    print("")
-    print("Then, at the ':' prompt, typically type: hp(0,0)unix")
+    information_screen()
 
     p.run(pc=0, **runoptions)
 
@@ -286,6 +298,7 @@ if __name__ == "__main__":
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--drive', action='append', default=[], dest='drives')
     parser.add_argument('--instlog', action='store_true')
+    parser.add_argument('--lda', action='store', default=None, dest='lda')
     args = parser.parse_args()
 
     pdpoptions = {'drivenames': args.drives}
@@ -297,4 +310,7 @@ if __name__ == "__main__":
 
     p = make_unix_machine(**pdpoptions)
 
-    boot_unix(p, runoptions=runoptions)
+    if args.lda:
+        boot_lda(p, args.lda)
+    else:
+        boot_unix(p, runoptions=runoptions)
