@@ -1024,7 +1024,7 @@ class PDP1170(PDP11):
         d = {}
         regnames = (* (f"R{i}" for i in range(6)), "SP", "PC")
         for i in range(8):
-            d[regnames[i]] = self.r[i]
+            d[regnames[i]] = f'{self.r[i]:06o}'
 
         d['PSW'] = self.psw
 
