@@ -113,6 +113,9 @@ class PDP11:
     # the console switches (read) and LEDs (write)
     SWLEDS_OFFS = 0o17570
 
+    # Microprogram break register
+    MICROPROG_BREAK_REG = 0o17770
+
     # this is a superb hack for controlling the logging level for debug
     # this is in the unibus address range reserved for "testers" -- not
     # sure what that really is but this is as good a place for it as any
@@ -238,6 +241,7 @@ class PDP11:
         for attrname, offs in (('psw', self.PS_OFFS),
                                ('stack_limit_register', self.STACKLIM_OFFS),
                                ('swleds', self.SWLEDS_OFFS),
+                               ('breakreg', self.MICROPROG_BREAK_REG),
                                ('lowersize', self.LOWERSIZE_OFFS),
                                ('uppersize', self.UPPERSIZE_OFFS),
                                ('systemID', self.SYSTEMID_OFFS),
@@ -245,8 +249,11 @@ class PDP11:
                                ('logging_hack', self.LOGGING_OFFS)):
             self.ub.register_simpleattr(self, attrname, offs)
 
+        # break register
+        self.breakreg = 0
+
         # console switches (read) and blinken lights (write)
-        self.swleds = 0
+        self.swleds = 128  # enable debug
         self.error_register = 0    # CPU Error register per handbook
 
         # NOTE: The cold machine starts out in stack limit violation.
@@ -554,6 +561,8 @@ class PDP11:
         if pc is not None:
             self.r[self.PC] = pc
 
+        self.issues = False
+
         # some shorthands for convenience
         interrupt_mgr = self.ub.intmgr
         mmu = self.mmu
@@ -579,6 +588,7 @@ class PDP11:
             except PDPTrap as trap:
                 abort_trap = trap
                 self.straps |= self.STRAPBITS.HIGHEST_ABORTTRAP
+                self.issues = True
 
             # pri order:abort traps (encoded as a strap), straps, interrupts
             if self.straps:
@@ -677,6 +687,8 @@ class PDP11:
         if trap is None:
             return
 
+        self.issues = True
+
         self.logger.debug(f"TRAP: {trap}:\n{self.machinestate()}")
         self.error_register |= trap.cpuerr
 
@@ -725,6 +737,14 @@ class PDP11:
 
     @swleds.setter
     def swleds(self, v):          # writing to the lights is a no-op for now
+        pass
+
+    @property
+    def breakreg(self):           # not implemented yet
+        return 0
+
+    @breakreg.setter
+    def breakreg(self, v):        # not implemented yet
         pass
 
     # technically not all -11's have stack limit support.
