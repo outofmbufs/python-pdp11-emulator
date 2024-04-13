@@ -1739,6 +1739,26 @@ class TestMethods(unittest.TestCase):
         with self.assertRaises(PDPTraps.AddressError):
             p.physRW_N(addr+1, len(words), words)
 
+    def test_registerio(self):
+        # on most processors the general purpose registers are not really
+        # accessible this way (only accessible via console phys interface)
+        # but in the emulation they are accessible so test them...
+        p = self.make_pdp()
+        startaddr = 0o4000
+
+        IOPAGEBASE = 0o160000             # last 8k of the 16 bit space
+        r0_addr = + p.IOPAGE_REGSETS_OFFS
+        a = InstructionBlock()
+        a.mov(IOPAGEBASE, 'r0')
+        a.mov(f"{p.IOPAGE_REGSETS_OFFS}.(r0)", 'r1')
+        a.mov(7, 'r2')                   # arbitrary; proving the next instr
+        a.mov('r0', f"{p.IOPAGE_REGSETS_OFFS+2}.(r0)")  # should write into r2
+        a.halt()
+        self.loadphysmem(p, a, startaddr)
+        p.run(pc=startaddr)
+        self.assertEqual(p.r[0], p.r[1])
+        self.assertEqual(p.r[0], p.r[2])
+
     def test_kl11_bytewrite(self):
         # Test for
         #    https://github.com/outofmbufs/python-pdp11-emulator/issues/14

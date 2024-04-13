@@ -26,7 +26,7 @@ from types import SimpleNamespace
 
 from pdptraps import PDPTrap, PDPTraps
 from mmu import MemoryMgmt
-from unibus import UNIBUS, UNIBUS_1170
+from unibus import UNIBUS, UNIBUS_1170, BusCycle
 from breakpoints import StepsBreakpoint, PCBreakpoint, XInfo
 
 from op4 import op4_dispatch_table
@@ -112,6 +112,9 @@ class PDP11:
 
     # the console switches (read) and LEDs (write)
     SWLEDS_OFFS = 0o17570
+
+    # Microprogram break register - some diagnostic programs look for this
+    MICROPROG_BREAK_REG = 0o17770
 
     # this is a superb hack for controlling the logging level for debug
     # this is in the unibus address range reserved for "testers" -- not
@@ -238,6 +241,7 @@ class PDP11:
         for attrname, offs in (('psw', self.PS_OFFS),
                                ('stack_limit_register', self.STACKLIM_OFFS),
                                ('swleds', self.SWLEDS_OFFS),
+                               ('breakreg', self.MICROPROG_BREAK_REG),
                                ('lowersize', self.LOWERSIZE_OFFS),
                                ('uppersize', self.UPPERSIZE_OFFS),
                                ('systemID', self.SYSTEMID_OFFS),
@@ -248,6 +252,7 @@ class PDP11:
         # console switches (read) and blinken lights (write)
         self.swleds = 0
         self.error_register = 0    # CPU Error register per handbook
+        self.breakreg = 0          # microprogram break register (diags)
 
         # NOTE: The cold machine starts out in stack limit violation.
         # (stack pointer = 0). However, the limit semantics only apply
@@ -830,7 +835,7 @@ class PDP1170(PDP11):
         """The other set of registers (the one that is not self.r)."""
         return self.registerfiles[1 - self.psw_regset]
 
-    def _ioregsets(self, addr, value=None, /):
+    def _ioregsets(self, addr, cycle, /, *, value=None):
         # NOTE that the encoding of the register addresses is quite funky
         #      and includes ODD addresses (!!!)
         # [ addresses given relative to I/O page base ]
@@ -859,24 +864,31 @@ class PDP1170(PDP11):
         # copy the stack pointer out of its r6 "cache" and dup the pc
         self._syncregs()
 
-        #        regset             regnum       r/w (value None or not)
-        match ((addr & 0o10) >> 3, addr & 0o07, value):
-            case (0, 6, None):
+        #        regset             regnum       r/w
+        match ((addr & 0o10) >> 3, addr & 0o07, cycle):
+            case (0, 6, BusCycle.READ16):
                 return self.stackpointers[self.KERNEL]
-            case (0, 6, newksp):
-                self.stackpointers[self.KERNEL] = newksp
-            case (1, 6, None):
+            case (0, 6, BusCycle.WRITE16):
+                self.stackpointers[self.KERNEL] = value
+            case (1, 6, BusCycle.READ16):
                 return self.stackpointers[self.SUPERVISOR]
-            case (1, 6, newssp):
-                self.stackpointers[self.SUPERVISOR] = newssp
-            case (1, 7, None):
+            case (1, 6, BusCycle.WRITE16):
+                self.stackpointers[self.SUPERVISOR] = value
+            case (1, 7, BusCycle.READ16):
                 return self.stackpointers[self.USER]
-            case (1, 7, newusp):
-                self.stackpointers[self.USER] = newusp
-            case (regset, regnum, None):
+            case (1, 7, BusCycle.WRITE16):
+                self.stackpointers[self.USER] = value
+            case (regset, regnum, BusCycle.READ16):
                 return self.registerfiles[regset][regnum]
-            case (regset, regnum, _):
+            case (regset, regnum, WRITE16):
                 self.registerfiles[regset][regnum] = value
+            case (regset, regnum, BusCycle.WRITE8):
+                # ? is this legal.
+                # Only the low-order byte would be addressible for even regs
+                # (that live at even addresses) and only the high-order byte
+                # would be addressible for odd registers (living at odd addrs).
+                # Funky! Raising this trap seems a better idea.
+                raise PDPTraps.AddressError(cpuerr=self.CPUERR_BITS.NXM)
 
         # if the stack pointer for the current mode was updated
         # then reestablish it as r[6]. Can just do this unconditionally
