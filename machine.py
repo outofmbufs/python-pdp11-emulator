@@ -880,7 +880,7 @@ class PDP1170(PDP11):
                 self.stackpointers[self.USER] = value
             case (regset, regnum, BusCycle.READ16):
                 return self.registerfiles[regset][regnum]
-            case (regset, regnum, WRITE16):
+            case (regset, regnum, BusCycle.WRITE16):
                 self.registerfiles[regset][regnum] = value
             case (regset, regnum, BusCycle.WRITE8):
                 # ? is this legal.
