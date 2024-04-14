@@ -4,11 +4,17 @@ from kw11 import KW11
 from kl11 import KL11
 from dc11 import DC11
 from rp import RPRM
-
 import breakpoints
 
 
-def boot_hp(p, /, *, addr=0o10000, deposit_only=False):
+bootmsg = """Starting PDP11; this window is NOT THE EMULATED PDP-11 CONSOLE.
+*** In another window, telnet/nc to localhost:1170 to connect.
+    Terminal should be in raw mode. On a mac, this is a good way:
+         (stty raw; nc localhost 1170; stty sane)
+"""
+
+
+def boot_hp(p, /, *, addr=0o10000, deposit_only=False, switches=0):
     """Deposit, then run, instructions to read first 1KB of drive 0 --> addr.
     RETURN VALUE:  addr if deposit_only else None
 
@@ -56,13 +62,6 @@ def boot_hp(p, /, *, addr=0o10000, deposit_only=False):
     p.r[p.PC] = addr
     if not deposit_only:
         p.run()
-
-        # at this point in real life the user would have to set the switches
-        # to deposit zero into the PC and then hit start; that takes time
-        # and means the bootstrap doesn't have to have code to wait for the
-        # drive to complete the read operation. Instead of adding code to
-        # the "pretend this was keyed in" program above, this delay works.
-        time.sleep(0.25)
 
     return addr if deposit_only else None
 
@@ -164,6 +163,21 @@ def load_lda_f(p, f):
     Any file format errors or I/O errors will raise an exception.
     """
 
+    # The file is (should be) a sequence of individual blocks (see
+    # comments in get_lda_block()). The last block must have no data.
+    while True:
+        addr, b = get_lda_block(f)
+        if len(b) == 0:
+            return addr
+        _byte_phys_write(p, b, addr)
+
+
+def get_lda_block(f):
+    """Read next block from LDA file. Return tuple: addr, b
+
+    If the block was an END block, len(b) will be zero.
+    """
+
     # Archived DEC documentation says an LDA/absolute loader file may start
     # with an arbitrary number of zero bytes. SIMH says that ANY block
     # (not just the first) may have arbitrary zeros in front of it, and
@@ -191,34 +205,24 @@ def load_lda_f(p, f):
     # The 'block length' includes the header bytes but not the checksum.
     # Thus the lengthof [DATA] is six less than the block length given.
     # Note that the [DATA] length is allowed to be odd, or zero.
-    #
-    # If the [DATA] length is zero (block length 6) the block is
-    # an "END" block that terminates the format. The address indicated
-    # is the "start address" and is returned.
 
-    while True:
-        header = _must_read_n(f, 6, zeroskip=True)
-        if header[0] != 1:
-            raise ValueError(f"header starts with {header[0]} not 1")
+    header = _must_read_n(f, 6, zeroskip=True)
+    if header[0] != 1:
+        raise ValueError(f"header starts with {header[0]} not 1")
 
-        count = (header[3] << 8) | header[2]
-        addr = (header[5] << 8) | header[4]
+    count = (header[3] << 8) | header[2]
+    addr = (header[5] << 8) | header[4]
 
-        if count < 6:
-            raise ValueError(f"header error, {count=}")
+    if count < 6:
+        raise ValueError(f"header error, {count=}")
 
-        b = _must_read_n(f, count-6)
+    b = _must_read_n(f, count-6)
 
-        chksum = _must_read_n(f, 1)
-        if (sum(header) + sum(b) + sum(chksum)) & 0xFF:
-            raise ValueError(f"checksum mismatch, {header=}")
+    chksum = _must_read_n(f, 1)
+    if (sum(header) + sum(b) + sum(chksum)) & 0xFF:
+        raise ValueError(f"checksum mismatch, {header=}")
 
-        if count == 6:         # END block with no data
-            return addr
-
-        _byte_phys_write(p, b, addr)
-
-    assert False, "unreachable"
+    return addr, b
 
 
 def boot_lda(p, fname, /, *, force_run=True):
@@ -243,6 +247,7 @@ def boot_lda(p, fname, /, *, force_run=True):
             return rawaddr
         addr = rawaddr - 1
 
+    print(bootmsg)
     p.run(pc=addr)
     return rawaddr
 
@@ -262,11 +267,7 @@ def boot_unix(p, runoptions={}):
     # load, and execute, the key-in bootstrap
     boot_hp(p)
 
-    print("Starting PDP11; this window is NOT THE EMULATED PDP-11 CONSOLE.")
-    print("*** In another window, telnet/nc to localhost:1170 to connect.")
-    print("    Terminal should be in raw mode. On a mac, this is a good way:")
-    print("         (stty raw; nc localhost 1170; stty sane)")
-    print("")
+    print(bootmsg)
     print("There will be no prompt; type 'boot' in your OTHER window")
     print("")
     print("Then, at the ':' prompt, typically type: hp(0,0)unix")
@@ -286,6 +287,7 @@ if __name__ == "__main__":
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--drive', action='append', default=[], dest='drives')
     parser.add_argument('--instlog', action='store_true')
+    parser.add_argument('--lda', action='store', default=None)
     args = parser.parse_args()
 
     pdpoptions = {'drivenames': args.drives}
@@ -297,4 +299,7 @@ if __name__ == "__main__":
 
     p = make_unix_machine(**pdpoptions)
 
-    boot_unix(p, runoptions=runoptions)
+    if args.lda:
+        boot_lda(p, args.lda)
+    else:
+        boot_unix(p, runoptions=runoptions)
