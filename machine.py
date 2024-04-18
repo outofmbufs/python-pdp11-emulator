@@ -599,7 +599,7 @@ class PDP11:
             reason = ".run -- HALTED: {}"
         else:
             reason = ".run -- breakpoint: {}"
-        self.logger.info(reason.format(self.machinestate()))
+        self.logger.info(reason.format(self.machinestate(fmt=oct)))
 
     def redyellowcheck(self):
         """stack limits: possibly sets YELLOW straps, or go RED."""
@@ -682,7 +682,7 @@ class PDP11:
         if trap is None:
             return
 
-        self.logger.debug(f"TRAP: {trap}:\n{self.machinestate()}")
+        self.logger.debug(f"TRAP: {trap}:\n{self.machinestate(fmt=oct)}")
         self.error_register |= trap.cpuerr
 
         # get the vector information -- always from KERNEL/DSPACE
@@ -788,7 +788,7 @@ class PDP11:
             # stack is not mapped, or the stack pointer is odd, or similar
             # very bad mistakes by the kernel code. It is a fatal halt
             self.logger.info(f"Trap ({e}) pushing trap frame onto stack")
-            self.logger.info(f"Machine state: {self.machinestate()}")
+            self.logger.info(f"Machine state: {self.machinestate(fmt=oct)}")
             self.logger.info("HALTING")
             self.halted = self.HALTED_STACK
         else:
@@ -1011,7 +1011,7 @@ class PDP1170(PDP11):
         return s
 
     # logging/debugging convenience
-    def machinestate(self):
+    def machinestate(self, fmt=None):
         # machine state is arbitrarily collected into a dictionary:
         d = {}
         regnames = (* (f"R{i}" for i in range(6)), "SP", "PC")
@@ -1036,5 +1036,14 @@ class PDP1170(PDP11):
             d['MMR2inst'] = self.mmu._invisread(self.mmu.MMR2)
         except PDPTrap as e:
             d['MMR2inst'] = e
+
+        # For humans (e.g., if logging) it may be desired to have things
+        # in octal or some other format. Eventually maybe "fmt" should
+        # be more elaborate but as a start "if fmt is oct" then convert
+        # everything into an octal string.
+        if fmt is oct:
+            for k, v in d.items():
+                pfx = '0' if v > 7 else ''
+                d[k] = pfx + oct(v)[2:]
 
         return d
