@@ -2128,7 +2128,7 @@ class TestMethods(unittest.TestCase):
         # that the rest of the code expects (and fiddles upper bits)
         # So ... test that.
         for i in range(0, 62, 2):
-            p.mmu.wordRW(ubmaps + (2 * i), i << 12 & 0o1777777)
+            p.mmu.wordRW(ubmaps + (2 * i), (i << 12) & 0o177777)
             p.mmu.wordRW(ubmaps + (2 * (i + 1)), 0)
 
         # XXX there is no real test yet because the UBMAPs
