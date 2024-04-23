@@ -155,13 +155,13 @@ class Logger(Breakpoint):
         self.__logger.debug(f"{pc_s}/{m_s} :: {inst_s}")
         return self.__bp(pdp, xinfo)
 
+
 # Useful for ensuring the emulation implementation isn't broken in
 # some way - making sure all values in physical memory are 16 bits (only).
 # This will run an expensive check every nth instructions.
 # Obviously, if bogus values are found it will be nearly impossible to
 # figure out HOW they got in there; put some checks back into readRW/etc
 # functions as necessary to debug that (they are removed for performance).
-
 
 class MemChecker(Breakpoint):
     def __init__(self, nth):
@@ -177,10 +177,10 @@ class MemChecker(Breakpoint):
 
     def check16(self, pdp):
         """Verifies no illegal values ended up in physical memory or regs."""
-        pdp.logger.debug("Check16 checking physical memory")
+        pdp.logger.debug("check16 checking physical memory")
         for a, w in enumerate(pdp.physmem):
             if w < 0 or w > 65535:
-                raise ValueError(f"Illegal physmem value {w} @ {oct(a<<2)}")
+                raise ValueError(f"Illegal physmem value {w} @ {oct(a<<1)}")
         for r, w in enumerate(pdp.r):
             if w < 0 or w > 65535:
                 raise ValueError(f"Illegal reg value {w} @ {r}")
