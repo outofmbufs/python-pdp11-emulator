@@ -45,8 +45,9 @@ class TestMethods(unittest.TestCase):
     # used to create various instances, collects all the options
     # detail into this one place... mostly this is about loglevel
     @classmethod
-    def make_pdp(cls):
-        return PDP1170(loglevel=cls.PDPLOGLEVEL)
+    def make_pdp(cls, memwords=64*1024):
+        m128 = [0] * memwords
+        return PDP1170(loglevel=cls.PDPLOGLEVEL, physmem=m128)
 
     @staticmethod
     def ioaddr(p, offs):
@@ -96,6 +97,15 @@ class TestMethods(unittest.TestCase):
         ns.MMR3 = cls.ioaddr(p, p.mmu.MMR3_OFFS)
 
         return ns
+
+    def check16(self, p):
+        """Verifies no illegal values ended up in physical memory or regs."""
+        for a, w in enumerate(p.physmem):
+            if w < 0 or w > 65535:
+                raise ValueError(f"Illegal physmem value {w} @ {oct(a<<2)}")
+        for r, w in enumerate(p.r):
+            if w < 0 or w > 65535:
+                raise ValueError(f"Illegal reg value {w} @ {r}")
 
     #
     # Create and return a test machine with a simple memory mapping:
@@ -207,6 +217,7 @@ class TestMethods(unittest.TestCase):
         p = self.make_pdp()
         self.loadphysmem(p, a, 0o10000)
         p.run(pc=0o10000)
+        self.check16(p)
         self.assertEqual(p.mmu.wordRW(p.r[6] - 2), 0o177777)
         self.assertEqual(p.mmu.wordRW(p.r[6] - 4), 0o111111)
 
@@ -227,6 +238,7 @@ class TestMethods(unittest.TestCase):
             with self.subTest(result=result, insts=insts):
                 p, pc = self.simplemapped_pdp(postmmu=insts)
                 p.run(pc=pc)
+                self.check16(p)
                 self.assertEqual(p.r[0], result)
 
     def test_mfpxsp(self):
@@ -259,6 +271,7 @@ class TestMethods(unittest.TestCase):
         th.halt()
         self.loadphysmem(p, th, 0o14000)
         p.run(pc=pc)
+        self.check16(p)
         self.assertEqual(p.r[2], p.r[3])
 
     def test_mtpi(self):
@@ -276,6 +289,7 @@ class TestMethods(unittest.TestCase):
             with self.subTest(r0result=r0result, insts=insts):
                 p, pc = self.simplemapped_pdp(postmmu=insts)
                 p.run(pc=pc)
+                self.check16(p)
                 self.assertEqual(p.r[0], r0result)
 
     def test_add_sub(self):
@@ -306,6 +320,7 @@ class TestMethods(unittest.TestCase):
                 p.r[0] = r0
                 p.r[1] = r1
                 p.run(pc=add_loc)
+                self.check16(p)
                 self.assertEqual(p.r[1], added)
                 if a_nzvc is not None:
                     self.assertEqual(p.psw & 0o17, a_nzvc)
@@ -314,6 +329,7 @@ class TestMethods(unittest.TestCase):
                 p.r[0] = r0
                 p.r[1] = r1
                 p.run(pc=sub_loc)
+                self.check16(p)
                 self.assertEqual(p.r[1], subbed)
                 if s_nzvc is not None:
                     self.assertEqual(p.psw & 0o17, s_nzvc)
@@ -336,6 +352,7 @@ class TestMethods(unittest.TestCase):
         self.loadphysmem(p, a, instloc)
 
         p.run(pc=instloc)
+        self.check16(p)
         self.assertEqual(p.r[0], loopcount)
         self.assertEqual(p.r[1], 0)
 
@@ -358,6 +375,7 @@ class TestMethods(unittest.TestCase):
             with self.subTest(r0_in=r0_in):
                 p.r[0] = r0_in
                 p.run(pc=instloc)
+                self.check16(p)
                 self.assertEqual(p.r[0], r0_out)
                 self.assertEqual(bool(p.psw_n), n)
                 self.assertEqual(bool(p.psw_z), z)
@@ -386,6 +404,7 @@ class TestMethods(unittest.TestCase):
             with self.subTest(r0_in=r0_in):
                 p.r[0] = r0_in
                 p.run(pc=instloc)
+                self.check16(p)
                 self.assertEqual(p.r[0], r0_out)
                 self.assertEqual(bool(p.psw_n), n)
                 self.assertEqual(bool(p.psw_z), z)
@@ -413,6 +432,7 @@ class TestMethods(unittest.TestCase):
         instloc = 0o4000
         self.loadphysmem(p, a, instloc)
         p.run(pc=instloc)
+        self.check16(p)
         self.assertEqual(p.r[1], goodval)
 
     # create the instruction sequence shared by test_cc and test_ucc
@@ -474,6 +494,7 @@ class TestMethods(unittest.TestCase):
             p.physmem[0o5002 >> 1] = higher
             with self.subTest(lower=lower, higher=higher):
                 p.run(pc=instloc)
+                self.check16(p)
                 self.assertEqual(p.r[0], 65534)
 
         # probably never a good idea, but ... do some random values
@@ -504,6 +525,7 @@ class TestMethods(unittest.TestCase):
         p = self.make_pdp()
         self.loadphysmem(p, a, instloc)
         p.run(pc=instloc)
+        self.check16(p)
         self.assertEqual(p.physmem[dataloc >> 1], bval)
         self.assertEqual(p.r[0], ptrloc+2)
 
@@ -521,6 +543,7 @@ class TestMethods(unittest.TestCase):
         p = self.make_pdp()
         self.loadphysmem(p, a, instloc)
         p.run(pc=instloc)
+        self.check16(p)
         self.assertEqual(p.physmem[dataloc >> 1], bval)
         self.assertEqual(p.r[0], ptrloc)
 
@@ -536,9 +559,11 @@ class TestMethods(unittest.TestCase):
         p = self.make_pdp()
         self.loadphysmem(p, a, instloc)
         p.run(pc=instloc)
+        self.check16(p)
         self.assertEqual(p.r[0], 0o377 << 8)
         self.assertFalse(p.psw_n)
         p.run()           # resume after first halt
+        self.check16(p)
         self.assertEqual(p.r[0], 0o377)
         self.assertTrue(p.psw_n)
 
@@ -558,6 +583,7 @@ class TestMethods(unittest.TestCase):
             p.physmem[0o5002 >> 1] = higher
             with self.subTest(lower=lower, higher=higher):
                 p.run(pc=instloc)
+                self.check16(p)
                 self.assertEqual(p.r[0], 65534)
 
         # probably never a good idea, but ... do some random values
@@ -572,6 +598,7 @@ class TestMethods(unittest.TestCase):
             p.physmem[0o5002 >> 1] = b
             with self.subTest(lower=a, higher=b):
                 p.run(pc=instloc)
+                self.check16(p)
                 self.assertEqual(p.r[0], 65534)
 
     def test_ash1(self):
@@ -588,6 +615,7 @@ class TestMethods(unittest.TestCase):
         instloc = 0o4000
         self.loadphysmem(p, a, instloc)
         p.run(pc=instloc)
+        self.check16(p)
         self.assertEqual(p.r[2], 0o1224)
 
     def test_shiftb(self):
@@ -607,6 +635,7 @@ class TestMethods(unittest.TestCase):
         instloc = 0o4000
         self.loadphysmem(p, a, instloc)
         p.run(pc=instloc)
+        self.check16(p)
         self.assertEqual(p.r[2], 1)
 
     def test_br(self):
@@ -657,6 +686,7 @@ class TestMethods(unittest.TestCase):
 
             # note the 2* because PC is an addr vs physmem word index
             p.run(pc=baseloc + (2*brspot))
+            self.check16(p)
 
             with self.subTest(offset=offset):
                 self.assertEqual(p.r[0], expected_R0)
@@ -673,6 +703,7 @@ class TestMethods(unittest.TestCase):
 
             # note the 2* because PC is an addr vs physmem word index
             p.run(pc=baseloc + (2*brspot))
+            self.check16(p)
 
             with self.subTest(offset=offset):
                 self.assertEqual(p.r[0], 17)
@@ -779,6 +810,7 @@ class TestMethods(unittest.TestCase):
 
         self.loadphysmem(p, a, 0o10000)
         p.run(pc=0o10000)
+        self.check16(p)
 
         # --- this is how the above was exported for use in SIMH ---
         # with open('div.ini', 'w') as f:
@@ -887,6 +919,7 @@ class TestMethods(unittest.TestCase):
         for R4, insts in testvectors:
             self.loadphysmem(p, insts, 0o3000)
             p.run(pc=0o3000)
+            self.check16(p)
             self.assertEqual(p.r[3], 0o123456)
             self.assertEqual(p.r[4], R4)
 
@@ -921,6 +954,7 @@ class TestMethods(unittest.TestCase):
 
             self.loadphysmem(p, a, 0o30000)
             p.run(pc=0o30000)
+            self.check16(p)
             self.assertEqual(p.r[3], p.r[1])
 
             # because the machine code did MOVB, values over 127 get
@@ -1391,7 +1425,7 @@ class TestMethods(unittest.TestCase):
         #
 
         cn = self.usefulconstants()
-        p = self.make_pdp()
+        p = self.make_pdp(memwords=256*1024)
 
         # On these addresses: the code isn't fully general (mostly in
         # how the MMU is set up). The kernel stack will start at 8K
@@ -1426,6 +1460,7 @@ class TestMethods(unittest.TestCase):
         with self.subTest(phase="UP"):
             # finally ready to run the whole shebang!
             p.run(pc=kaddr)
+            self.check16(p)
 
             # a halt was encountered, verify r2 is the end sentinel
             self.assertEqual(p.r[2], 0o666)
@@ -1434,12 +1469,14 @@ class TestMethods(unittest.TestCase):
             # run the down test
             p.r[2] = 0            # superfluous but makes sure
             p.run(pc=downtest)
+            self.check16(p)
             self.assertEqual(p.r[2], 0o666)
 
         with self.subTest(phase="BONUS"):
             # and the bonus test
             p.r[2] = 0            # superfluous but makes sure
             p.run(pc=bonus)
+            self.check16(p)
             self.assertEqual(p.r[2], 0o666)
 
     def test_mmu_AWbits(self):
@@ -1553,6 +1590,7 @@ class TestMethods(unittest.TestCase):
 
         self.loadphysmem(p, k, base_address)
         p.run(pc=base_address)
+        self.check16(p)
         self.assertEqual(p.r[0], 0)
 
     def test_stacklim0(self):
@@ -1574,6 +1612,7 @@ class TestMethods(unittest.TestCase):
         aa = 0o4000
         self.loadphysmem(p, a, aa)
         p.run(pc=aa)
+        self.check16(p)
         self.assertEqual(p.r[0], 3)    # confirm made it all the way through
 
     def _stacklimcode(self, go_red=False):
@@ -1649,6 +1688,7 @@ class TestMethods(unittest.TestCase):
 
         p = self._stacklimcode()
         p.run()
+        self.check16(p)
 
         # obtained by running machine code in SIMH
         expected_7000 = [
@@ -1666,6 +1706,7 @@ class TestMethods(unittest.TestCase):
     def test_stacklim_red(self):
         p = self._stacklimcode(go_red=True)
         p.run()
+        self.check16(p)
 
         # Behavior/results verified by running machine code on SIMH;
         # however, SIMH halts the simulation on the red stack trap and
@@ -1759,6 +1800,7 @@ class TestMethods(unittest.TestCase):
         a.halt()
         self.loadphysmem(p, a, startaddr)
         p.run(pc=startaddr)
+        self.check16(p)
         self.assertEqual(p.r[0], p.r[1])
         self.assertEqual(p.r[0], p.r[2])
 
@@ -1776,6 +1818,7 @@ class TestMethods(unittest.TestCase):
         a.halt()
         self.loadphysmem(p, a, startaddr)
         p.run(pc=startaddr)
+        self.check16(p)
         self.assertEqual(p.r[0], 1)
 
     def test_io(self):
@@ -1828,6 +1871,7 @@ class TestMethods(unittest.TestCase):
 
         p.ub.register(callback, ioaddr & 8191)
         p.run(pc=startaddr)
+        self.check16(p)
         # per the various comments in the test sequence above
         self.assertEqual(p.r[0], RESET_VALUE)
         self.assertEqual(p.r[1], 1)
@@ -1869,6 +1913,7 @@ class TestMethods(unittest.TestCase):
         for i in range(maxtest):
             with self.subTest(i=i):
                 p.run_steps(pc=startaddr, steps=i+1)
+                self.check16(p)
                 self.assertEqual(p.r[0], i)
 
     def test_breakpoints2(self):
@@ -1889,6 +1934,7 @@ class TestMethods(unittest.TestCase):
         for i in range(maxtest):
             with self.subTest(i=i):
                 p.run_until(pc=startaddr, stoppc=startaddr+a.getlabel(f"L{i}"))
+                self.check16(p)
                 self.assertEqual(p.r[0], i)
 
     def test_breakpoints3(self):
@@ -1926,18 +1972,22 @@ class TestMethods(unittest.TestCase):
         # this test just knows there are four of them, code the easy/dumb way:
         p.r[p.PC] = startaddr
         p.run(breakpoint=mbp)
+        self.check16(p)
 
         # this should have fired after 1 instruction...
         self.assertEqual(p.r[0], 1)
 
         # the next two similar
         p.run(breakpoint=mbp)
+        self.check16(p)
         self.assertEqual(p.r[0], 50)
         p.run(breakpoint=mbp)
+        self.check16(p)
         self.assertEqual(p.r[0], 75)
 
         # the last one will complete because of the HALT
         p.run(breakpoint=mbp)
+        self.check16(p)
         self.assertEqual(p.r[0], 0)
 
         # this is really an internal detail, but test it as a way
@@ -1978,6 +2028,7 @@ class TestMethods(unittest.TestCase):
         instloc = 0o4000
         self.loadphysmem(p, a, instloc)
         p.run(pc=instloc, breakpoint=BKP.Logger())
+        self.check16(p)
 
         # This is a probably-too-fragile attempt to see if each of the above
         # instructions made it into the logfile, in order. While trying to
@@ -2011,6 +2062,7 @@ class TestMethods(unittest.TestCase):
             self.loadphysmem(p, a, startaddr)
             bp = BKP.Lookback()
             p.run(pc=startaddr, breakpoint=bp)
+            self.check16(p)
             # if current == first, there was 1 lookback, that's 1
             # But also the halt instruction takes up on; hence +2
             n = (p.r[0] - bp.states[0][1]['R0']) + 2
@@ -2032,7 +2084,9 @@ class TestMethods(unittest.TestCase):
             bp7 = BKP.Lookback(BKP.StepsBreakpoint(steps=i+1), lookbacks=7)
             with self.subTest(i=i):
                 p.run(pc=startaddr, breakpoint=bp)
+                self.check16(p)
                 p.run(pc=startaddr, breakpoint=bp7)
+                self.check16(p)
                 self.assertEqual(p.r[0], i)
                 if i+1 <= default_lookbacks:
                     self.assertEqual(len(bp.states), i+1)
@@ -2059,6 +2113,7 @@ class TestMethods(unittest.TestCase):
         for offs, r2 in ((4, 4), (6, 3), (8, 2), (10, 1), (12, 0)):
             p.r[0] = instloc + offs
             p.run(pc=instloc)
+            self.check16(p)
             with self.subTest(offs=offs):
                 self.assertEqual(p.r[2], r2)
 
@@ -2100,6 +2155,7 @@ class TestMethods(unittest.TestCase):
         self.loadphysmem(p, a, instloc)
 
         p.run(pc=instloc)
+        self.check16(p)
 
         # results by hand-computation but also cross verified in SIMH
         self.assertEqual(p.r[0], 8)
