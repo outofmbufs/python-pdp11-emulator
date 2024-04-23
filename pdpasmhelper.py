@@ -299,6 +299,9 @@ class PDP11InstructionAssembler:
 
     def literal(self, inst, oprnd=None, /):
         """For hand-assembled instructions. Also allows 1 operand."""
+        # prevent bad values from leaking into physical memory this way
+        if inst < 0 or inst > 65535:
+            raise ValueError(f"Bad instruction literal: {inst}")
         return self._1op(inst, oprnd)
 
 
