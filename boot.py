@@ -292,10 +292,19 @@ if __name__ == "__main__":
 
     pdpoptions = {'drivenames': args.drives}
     runoptions = {}
+    bkpts = []
     if args.debug:
         pdpoptions['loglevel'] = 'DEBUG'
+        bkpts.append(breakpoints.MemChecker(1000000))
     if args.instlog:
-        runoptions['breakpoint'] = breakpoints.Logger()
+        bkpts.append(breakpoints.Logger())
+
+    if bkpts:
+        # if there is just one, use it directly, else combine 'em
+        if len(bkpts) == 1:
+            runoptions['breakpoint'] = bkpts[0]
+        else:
+            runoptions['breakpoint'] = breakpoints.MultiBreakpoint(*bkpts)
 
     p = make_unix_machine(**pdpoptions)
 
