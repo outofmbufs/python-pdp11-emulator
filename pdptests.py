@@ -57,6 +57,9 @@ class TestMethods(unittest.TestCase):
     @staticmethod
     def loadphysmem(p, words, addr):
         for a, w in enumerate(words, start=(addr >> 1)):
+            # make sure no bogus values get into memory
+            if w < 0 or w > 65535:
+                raise ValueError(f"Illegal value {w} in loadphysmem")
             p.physmem[a] = w
 
     # some of these can't be computed at class definition time, so...
@@ -198,13 +201,13 @@ class TestMethods(unittest.TestCase):
         a.mov('r0', 'sp')
         a.halt()
         a.literal(0o111111)
-        a.literal(0o777777)
+        a.literal(0o177777)
         a.label('stack')
 
         p = self.make_pdp()
         self.loadphysmem(p, a, 0o10000)
         p.run(pc=0o10000)
-        self.assertEqual(p.mmu.wordRW(p.r[6] - 2), 0o777777)
+        self.assertEqual(p.mmu.wordRW(p.r[6] - 2), 0o177777)
         self.assertEqual(p.mmu.wordRW(p.r[6] - 4), 0o111111)
 
     # these tests end up testing other stuff too of course, including MMU
