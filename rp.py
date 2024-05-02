@@ -47,7 +47,7 @@ class RPRM:
         'DC': 0o34,          # desired cylinder
         'CC': 0o36,          # "current cylinder" and/or holding register
         'BAE': 0o50,         # address extension (pdp11/70 extra phys bits)
-        }
+    }
 
     HPDS_BITS = SimpleNamespace(
         OFM=0o000001,               # offset mode
@@ -141,46 +141,40 @@ class RPRM:
         self.command_history.pop(-1)
         self.command_history.insert(0, (value, self.statestring()))
 
-        self.logger.debug(f"RP: writing CS1 to {oct(value)}; "
-                          f"state: {self.statestring()}")
         self._cs1 = value
         self.logger.debug(f"RP: CS1 set to {oct(self._cs1)}")
-        if self._cs1 & 0x4000:
-            self.logger.debug(f"LOOK!!!! XXX")
         if self._cs1 & self.HPCS1_BITS.RDY:
             self.AS = 1            # this is very bogus but maybe works for now
 
-        # TRE/ERROR always cleared on next op
-        if value & self.HPCS1_BITS.GO:
-            self._cs1 &= ~self.HPCS1_BITS.TRE
+        cmd = self._cs1 & self.HPCS1_BITS.FN      # NOTE: not shifted
+        gobit = self._cs1 & self.HPCS1_BITS.GO
+        if gobit:
+            # clear the command, the go bit, and also TRE/ERROR (per book)
+            self._cs1 &= ~(cmd | self.HPCS1_BITS.GO | self.HPCS1_BITS.TRE)
 
-        match value & self.HPCS1_BITS.FN, value & self.HPCS1_BITS.GO:
-            case 0, go:
-                self._cs1 &= ~go
+        match cmd, gobit:
+            case 0, _:
+                pass
 
-            case 0o06 | 0o12 | 0o16 | 0o20 | 0o22 as fcode, go:
+            case 0o06 | 0o12 | 0o16 | 0o20 | 0o22 as fcode, _:
                 self.logger.debug(f"RP: operation {oct(fcode)} ignored.")
                 self.logger.debug(self.statestring())
-                self._cs1 &= ~(go | fcode)
                 self._cs1 |= self.HPCS1_BITS.RDY
                 if self._cs1 & self.HPCS1_BITS.IE:
                     self.ub.intmgr.simple_irq(5, 0o254)
 
             case 0o30, 1:          # SEARCH
-                self._cs1 &= ~0o31
                 self._cs1 |= self.HPCS1_BITS.RDY
                 self.CC = self.DC
                 if self._cs1 & self.HPCS1_BITS.IE:
                     self.ub.intmgr.simple_irq(5, 0o254)
 
             case 0o60, 1:
-                self._cs1 &= ~0o61
                 self.writecmd()
                 if self._cs1 & self.HPCS1_BITS.IE:
                     self.ub.intmgr.simple_irq(5, 0o254)
 
             case 0o70, 1:
-                self._cs1 &= ~0o71
                 self.readcmd()
                 if self._cs1 & self.HPCS1_BITS.IE:
                     self.ub.intmgr.simple_irq(5, 0o254)
