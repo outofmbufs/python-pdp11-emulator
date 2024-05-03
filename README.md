@@ -51,9 +51,13 @@ For example:
 showing a program: MOV R2, R3 / HALT and running it and showing the before and after (as the "2" is copied from R2 to R3)
 
 ## To boot UNIX:
-* Obtain a disk image. I am using hp.disk0 from the unix7 subdirectory of the systems directory from SIMH.
+* I have successfully run unix v7 from the HP/RM disk emulation, and unix v5 from the RK05 emulation. unix v6 won't boot and I don't yet know why.
 
-* name that file rp.disk ... the name is not configurable in the code yet.
+* Obtain a disk image; the ones I am using are hp.disk0 from the unix7 subdirectory of the systems directory from SIMH or v5root.rk from the same place.
+
+### Booting v7 UNIX
+
+* Take the hp.disk0 file and name it rp.disk ... the name is not configurable in the code yet.
 
 * You will need two separate shell windows. One will be the running python window, where not much happens once you get started. The other will be your emulated console. In the first window, type this:
 
@@ -86,6 +90,25 @@ Exit the single user shell (type a control-D) to get into multi-user mode. NOTE:
 
 
 Enjoy!
+
+### Booting v5 UNIX
+
+* You will need two separate shell windows. One will be the running python window, where not much happens once you get started. The other will be your emulated console. In the first window, type this:
+
+    python3 boot.py --drive v5root.rk --rk
+
+You may wish to examine 'boot.py' to see how all this works. If you named your copy of the simh RK05 image something else, use that in place of "v5root.rk". The "--rk" option creates an 11/70 with RK05 drives instead of the hp/RM80. You can, of course, construct a machine with both (or multiple drives) but see the boot.py and machine.py code for how to do that.
+
+In the second window, you need to telnet to port 1170 to connect to the console emulation. It will be very helpful to be in raw terminal mode too. On the mac I do it like this:
+
+    % (stty raw; nc localhost 1170; stty sane)
+
+in this window you will get a prompt '@' ... type:
+
+   unix
+
+at that '@' prompt and v5 unix will boot up. Login as root, no password.
+
 
 ## Understanding the code
 I'll have to write more about this later; as a first step to getting around:
