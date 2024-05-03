@@ -8,7 +8,8 @@ from rk11 import RK11
 import breakpoints
 
 
-bootmsg = """Starting PDP11; this window is NOT THE EMULATED PDP-11 CONSOLE.
+STDMSG = """\
+Starting PDP11; this window is NOT THE EMULATED PDP-11 CONSOLE.
 *** In another window, telnet/nc to localhost:1170 to connect.
     Terminal should be in raw mode. On a mac, this is a good way:
          (stty raw; nc localhost 1170; stty sane)
@@ -279,7 +280,7 @@ def get_lda_block(f):
     return addr, b
 
 
-def boot_lda(p, fname, /, *, force_run=True):
+def boot_lda(p, fname, /, *, force_run=True, msg=None):
     """Load and boot an LDA/BIC/absolute-loader file.
 
     By default, the loaded code is started even if the start address
@@ -301,7 +302,8 @@ def boot_lda(p, fname, /, *, force_run=True):
             return rawaddr
         addr = rawaddr - 1
 
-    print(bootmsg)
+    if msg:
+        print(msg.format(STDMSG))
     p.run(pc=addr)
     return rawaddr
 
@@ -319,15 +321,13 @@ def make_unix_machine(*, loglevel='INFO', drivenames=[], rk=False):
     return p
 
 
-def boot_unix(p, runoptions={}, diskboot=boot_hp):
+def boot_unix(p, /, *, runoptions={}, diskboot=boot_hp, msg="{}\n"):
 
     # load, and execute, the key-in bootstrap
     diskboot(p)
 
-    print(bootmsg)
-    print("There will be no prompt; type 'boot' in your OTHER window")
-    print("")
-    print("Then, at the ':' prompt, typically type: hp(0,0)unix")
+    if msg:
+        print(msg.format(STDMSG))
 
     p.run(pc=0, **runoptions)
 
@@ -346,6 +346,7 @@ if __name__ == "__main__":
     parser.add_argument('--rk', action='store_true')
     parser.add_argument('--instlog', action='store_true')
     parser.add_argument('--lda', action='store', default=None)
+    parser.add_argument('--bootmsg', type=str)
     args = parser.parse_args()
 
     pdpoptions = {'drivenames': args.drives}
@@ -366,9 +367,28 @@ if __name__ == "__main__":
 
     p = make_unix_machine(**pdpoptions, rk=args.rk)
 
+    unixboot_options = {}
+    if args.bootmsg:
+        unixboot_options['msg'] = args.bootmsg
+
+    # the default boot messages are a bit hokey, in that they sort of
+    # know that booting an rk is the older bootstrap and booting hp is
+    # the newer unix bootstrap, but so be it. Specify --bootmsg to override.
+    if args.rk:
+        unixboot_options['diskboot'] = boot_rk
+        if not args.bootmsg:
+            unixboot_options['msg'] = "{}\n" + \
+                "At '@' prompt in that OTHER window, " + \
+                "(typically) type: unix\n" + \
+                "********* EVERYTHING TYPED HERE IS IGNORED *********"
+    else:
+        if not args.bootmsg:
+            unixboot_options['msg'] = "{}\n" + \
+                "There will be no prompt; type 'boot' in OTHER window\n" + \
+                "Then, at the ':' prompt, typically type: hp(0,0)unix\n" + \
+                "********* EVERYTHING TYPED HERE IS IGNORED *********"
+
     if args.lda:
         boot_lda(p, args.lda)
-    elif args.rk:
-        boot_unix(p, runoptions=runoptions, diskboot=boot_rk)
     else:
-        boot_unix(p, runoptions=runoptions)
+        boot_unix(p, runoptions=runoptions, **unixboot_options)
