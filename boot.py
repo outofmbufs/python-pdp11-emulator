@@ -4,6 +4,7 @@ from kw11 import KW11
 from kl11 import KL11
 from dc11 import DC11
 from rp import RPRM
+from rk11 import RK11
 import breakpoints
 
 
@@ -54,6 +55,59 @@ def boot_hp(p, /, *, addr=0o10000, deposit_only=False, switches=0):
         0o012740,          # MOV #071, -(R0)
         0o000071,
         0o0,               # HALT
+    )
+
+    for o, w in enumerate(program_insts):
+        p.physRW(addr + o + o, w)
+
+    p.r[p.PC] = addr
+    if not deposit_only:
+        p.run()
+
+    return addr if deposit_only else None
+
+
+def boot_rk(p, /, *, addr=0o10000, deposit_only=False, switches=0):
+    """Deposit, then run, instructions to read first 1KB of drive 0 --> addr.
+    RETURN VALUE:  addr if deposit_only else None
+
+    If no 'addr' given, it defaults to something out of the way.
+
+    If not deposit_only (default):
+       * The instructions are loaded to 'addr'
+       * They are executed.
+       * Return value is None.
+       * NOTE: The next start address depends on what those instructions do.
+       *       TYPICALLY, the next start address will be zero.
+
+    If deposit_only:
+       * The instructions are loaded to 'addr'
+       * 'addr' is returned.
+    """
+
+    # this is the sort of thing that would be keyed in from
+    # the console switches (if the machine was not equipped
+    # with a boot rom option to hold it instead)
+    #
+    # It is a minimalist  program, with lots of assumptions, to  read 1K
+    # from block zero of drive 0 into location 0. The execution start
+    # at zero is done elsewhere.
+    #
+    # NOTE WELL: THIS ASSUMES THE MACHINE IS IN RESET CONDITION WHICH
+    #            MEANS MANY OF THE DEVICE REGISTERS ARE ASSUMED TO BE ZERO
+    #
+    #   MOV #177406,R0
+    #   MOV #177400,(R0)
+    #   MOV #5,-(R0)
+
+    program_insts = (
+        0o012700,         # MOV #177406,R0
+        0o177406,
+        0o012710,         # MOV #177400,(R0)
+        0o177400,
+        0o012740,         # MOV #5,-(R0)
+        0o000005,
+        0o0               # HALT
     )
 
     for o, w in enumerate(program_insts):
@@ -252,20 +306,23 @@ def boot_lda(p, fname, /, *, force_run=True):
     return rawaddr
 
 
-def make_unix_machine(*, loglevel='INFO', drivenames=[]):
+def make_unix_machine(*, loglevel='INFO', drivenames=[], rk=False):
     p = PDP1170(loglevel=loglevel)
 
     p.associate_device(KW11(p.ub), 'KW')    # line clock
     p.associate_device(KL11(p.ub), 'KL')    # console
-    p.associate_device(RPRM(p.ub, *drivenames), 'RP')    # disk drive
+    if rk:
+        p.associate_device(RK11(p.ub, *drivenames), 'RK')    # disk drive
+    else:
+        p.associate_device(RPRM(p.ub, *drivenames), 'RP')    # disk drive
     p.associate_device(DC11(p.ub), 'DC')    # additional serial poirts
     return p
 
 
-def boot_unix(p, runoptions={}):
+def boot_unix(p, runoptions={}, diskboot=boot_hp):
 
     # load, and execute, the key-in bootstrap
-    boot_hp(p)
+    diskboot(p)
 
     print(bootmsg)
     print("There will be no prompt; type 'boot' in your OTHER window")
@@ -286,6 +343,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--drive', action='append', default=[], dest='drives')
+    parser.add_argument('--rk', action='store_true')
     parser.add_argument('--instlog', action='store_true')
     parser.add_argument('--lda', action='store', default=None)
     args = parser.parse_args()
@@ -295,7 +353,7 @@ if __name__ == "__main__":
     bkpts = []
     if args.debug:
         pdpoptions['loglevel'] = 'DEBUG'
-        bkpts.append(breakpoints.MemChecker(1000000))
+        bkpts.append(breakpoints._MemChecker(1000000))
     if args.instlog:
         bkpts.append(breakpoints.Logger())
 
@@ -306,9 +364,11 @@ if __name__ == "__main__":
         else:
             runoptions['breakpoint'] = breakpoints.MultiBreakpoint(*bkpts)
 
-    p = make_unix_machine(**pdpoptions)
+    p = make_unix_machine(**pdpoptions, rk=args.rk)
 
     if args.lda:
         boot_lda(p, args.lda)
+    elif args.rk:
+        boot_unix(p, runoptions=runoptions, diskboot=boot_rk)
     else:
         boot_unix(p, runoptions=runoptions)
