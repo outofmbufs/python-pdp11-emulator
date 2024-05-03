@@ -26,6 +26,7 @@ from pdptraps import PDPTraps, PDPTrap
 
 
 BusCycle = Enum('BusCycle', ('READ16', 'WRITE16', 'WRITE8', 'RESET'))
+BusWrites = {BusCycle.WRITE16, BusCycle.WRITE8}      # convenience
 
 
 class UNIBUS:
@@ -133,10 +134,19 @@ class UNIBUS:
         for i in range(nwords):
             self.mmiomap[idx+i] = iofunc
 
+    # this is a convenience routine for devices that want to signal things
+    # such as a write to a read-only register (if they don't simply just
+    # ignore them). Devices can, of course, just raise the traps themselves.
+    def illegal_cycle(self, addr, /, *, cycle=BusCycle.WRITE16, msg=None):
+        if msg is None:
+            msg =f"Illegal cycle ({cycle}) at {oct(addr)}"
+        self.cpu.logger.info(msg)
+        raise PDPTraps.AddressError(cpuerr=self.cpu.CPUERR_BITS.UNIBUS_TIMEOUT)
+
     # the default entry for unoccupied I/O: cause an AddressError trap
     def __nodev(self, addr, cycle, /, *, value=None):
-        self.cpu.logger.info(f"Access to non-existent I/O {oct(addr)}")
-        raise PDPTraps.AddressError(cpuerr=self.cpu.CPUERR_BITS.UNIBUS_TIMEOUT)
+        self.illegal_cycle(addr, cycle=cycle,
+                           msg=f"Non-existent I/O @ offset {oct(addr)}")
 
     # Devices may have simple "dummy" I/O addresses that always read zero
     # and ignore writes; See "if iofunc is None" in register() method.
@@ -178,7 +188,15 @@ class UNIBUS:
     #
     # BusCycle.WRITE8 handling: autobyte() is used. If those semantics are not
     # suitable, the device must create its own i/o func instead of this.
-    def register_simpleattr(self, obj, attrname, addr, reset=False):
+    #
+    # readonly: If True (default is False) then writes to this address will
+    #           cause an AddressError trap. The device implementation can
+    #           safely (if it wants to) implement the attribute directly
+    #           (i.e., without using @property) and no write to the attribute
+    #           will ever originate from here.
+    #
+    def register_simpleattr(self, obj, attrname, addr, /, *,
+                            reset=False, readonly=False):
         """Create and register a handler to read/write the named attr.
 
         obj - the object (often "self" for the caller of this method)
@@ -188,6 +206,10 @@ class UNIBUS:
         If attrname is None, the address is registered as a dummy location
         that ignores writes and will always read as zero. This is sometimes
         useful for features that have to exist but are emulated as no-op.
+
+        reset - if True, attrname will be set to zero on BusCycle.RESET
+        readonly - if True, attrname is readonly and will never be written.
+                   Write cycles to the addr will cause AddressError.
         """
 
         # could do this with partial, but can also do it with this nested
@@ -197,21 +219,34 @@ class UNIBUS:
             def _rwattr(_, cycle, /, *, value=None):
                 if cycle == BusCycle.READ16:
                     return 0
+                if cycle in BusWrites and readonly:
+                    self.illegal_cycle(addr, cycle)
                 # all other operations just silently ignored
         else:
             def _rwattr(_, cycle, /, *, value=None):
                 if cycle == BusCycle.READ16:
                     return getattr(obj, attrname)
-                elif cycle == BusCycle.WRITE16:
-                    setattr(obj, attrname, value)
+                elif cycle in BusWrites:
+                    if readonly:
+                        self.illegal_cycle(addr, cycle)
+                    else:         # autobyte assumed ... see register() below
+                        setattr(obj, attrname, value)
                 elif cycle == BusCycle.RESET:
                     if reset:
                         setattr(obj, attrname, 0)
                 else:
                     assert False, f"Unknown {cycle=} in simpleattr"
 
-        # NOTE: it's a new defn/closure of _rwattr each time through
-        self.register(self.autobyte(_rwattr), addr)
+        # NOTES:
+        #   * it's a new defn/closure of _rwattr each time through, so the
+        #     individual (per registration) addr/etc values are closure'd
+        #   * Do not autobyte if readonly, simply so that the correct
+        #     (unmolested) BusCycle.WRITE8 will be seen in the trap/errors
+        #   * _rwattr ASSUMES autobyte() wrapper if not readonly
+        if readonly:
+            self.register(_rwattr, addr)
+        else:
+            self.register(self.autobyte(_rwattr), addr)
 
     def wordRW(self, ioaddr, value=None, /):
         """Read (value is None) or write the given I/O address."""
