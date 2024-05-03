@@ -57,13 +57,18 @@ XInfo = collections.namedtuple('XInfo', ['PC', 'instruction'])
 
 
 class Breakpoint:
-    # the base Breakpoint class: a null breakpoint that never fires
+    """Base Breakpoint - a null breakpoint that never fires."""
     def __call__(self, pdp, xinfo):
         return False
 
 
 class StepsBreakpoint(Breakpoint):
-    def __init__(self, *args, steps, **kwargs):
+    """Break after the given number of instructions."""
+
+    def __init__(self, steps):
+        """steps is the number of instructions until breakpoint."""
+        if steps < 1:
+            raise ValueError(f"steps ({steps}) must be at least 1")
         self.togo = steps
 
     def __call__(self, pdp, xinfo):
@@ -72,7 +77,13 @@ class StepsBreakpoint(Breakpoint):
 
 
 class PCBreakpoint(Breakpoint):
+    """Break at the given PC"""
+
     def __init__(self, *, stoppc, stopmode=None):
+        """stoppc is the pc location to break at.
+           optional stopmode restricts the breakpoint to the given
+           mode (0, 1, 3 for Kernel/Supervisor/User)
+        """
         self.stoppc = stoppc
         self.stopmf = lambda m: (stopmode is None) or (m == stopmode)
 
@@ -85,7 +96,12 @@ class PCBreakpoint(Breakpoint):
 
 # Fire on the Nth occurrence of the given breakpoint
 class NthBreakpoint(Breakpoint):
-    def __init__(self, bp, nth, /, *args, **kwargs):
+    """Break after the nth occurrence of a given breakpoint"""
+
+    def __init__(self, bp, nth, /):
+        """Break when 'bp' has occurred 'nth' times."""
+        if nth < 1:
+            raise ValueError(f"nth ({nth}) must be at least 1")
         self.__nth = self.__count = nth
         self.__bp = bp
 
@@ -100,8 +116,16 @@ class NthBreakpoint(Breakpoint):
 # lookback if the run() loop terminates for any reason (e.g., a HALT).
 #
 class Lookback(Breakpoint):
+    """Records machine state after each instruction."""
 
-    def __init__(self, bp=None, /, *args, lookbacks=100, **kwargs):
+    def __init__(self, bp=None, /, lookbacks=100):
+        """Augments breakpoint 'bp' with a lookback record of machine state.
+
+        'lookbacks' (default == 100) is how far back state is kept. The
+        record is FIFO (i.e., the last N states are kept)
+
+        See states property for obtaining the lookback record.
+        """
         self.__backstates = collections.deque([], lookbacks)
         self.__bp = bp or (lambda pdp, xinfo: False)
 
@@ -111,13 +135,24 @@ class Lookback(Breakpoint):
 
     @property
     def states(self):
+        """Return the lookback states."""
         return list(self.__backstates)
 
 
 class MultiBreakpoint(Breakpoint):
-    # a breakpoint that fires if any of the contained breakpoints fire
+    """A Breakpoint that fires if any of the contained breakpoints fire."""
 
     def __init__(self, bp0, /, *bps, testall=True):
+        """MultiBreakpoint(bp0, *bps, testall=True)
+
+        If testall is true (the default) all breakpoints are tested each
+        time no matter what. This is generally desired because breakpoint
+        tests often have side effects (e.g., a "steps until fires" counter
+        is decremented, or log entries are made).
+
+        If not testall, breakpoints after one that fires are not tested.
+        """
+
         self.testall = testall
         self.bkpts = [bp0] + list(bps)
 
@@ -139,6 +174,7 @@ class MultiBreakpoint(Breakpoint):
 #      bp = Logger()
 #
 class Logger(Breakpoint):
+    """Log every instruction. Caution: LARGE logs, slow performance."""
 
     def __init__(self, bp=None, /, *, logger=None):
         self.__bp = bp or (lambda pdp, info: False)
@@ -160,10 +196,10 @@ class Logger(Breakpoint):
 # some way - making sure all values in physical memory are 16 bits (only).
 # This will run an expensive check every nth instructions.
 # Obviously, if bogus values are found it will be nearly impossible to
-# figure out HOW they got in there; put some checks back into readRW/etc
+# figure out HOW they got in there; put some checks back into mmu word/byteRW
 # functions as necessary to debug that (they are removed for performance).
 
-class MemChecker(Breakpoint):
+class _MemChecker(Breakpoint):
     def __init__(self, nth):
         self.check_every = nth
         self.togo = nth
