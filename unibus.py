@@ -139,7 +139,7 @@ class UNIBUS:
     # ignore them). Devices can, of course, just raise the traps themselves.
     def illegal_cycle(self, addr, /, *, cycle=BusCycle.WRITE16, msg=None):
         if msg is None:
-            msg =f"Illegal cycle ({cycle}) at {oct(addr)}"
+            msg = f"Illegal cycle ({cycle}) at {oct(addr)}"
         self.cpu.logger.info(msg)
         raise PDPTraps.AddressError(cpuerr=self.cpu.CPUERR_BITS.UNIBUS_TIMEOUT)
 
