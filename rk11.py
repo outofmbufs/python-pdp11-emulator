@@ -201,7 +201,9 @@ class RK11:
                 pass
 
             case 0o16, 1:                    # write lock (write protect)
-                self.writelock()
+                f = self._get_drive_f()
+                if f is not None:
+                    self._writelocks.add(f)
 
             case _, 0:            # anything else without the go bit is a nop
                 pass
