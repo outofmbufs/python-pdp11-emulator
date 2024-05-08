@@ -1759,18 +1759,29 @@ class TestMethods(unittest.TestCase):
             1, 0, 9, 0, 6, 8,  # testing lack of zero skip
             7, 8, 9,
             208,
+        ]
 
-            # the END block
+        # test two variations of the END block, with and without checksum
+        # The docs say no checksum is present so it never really gets read
+        # if it is there (so the harder test is if it is not there)
+        endblk_with = [
             1, 0, 6, 0, 1, 1, 247
         ]
-        with io.BytesIO(bytes(ldabytes)) as f:
-            addr = boot.load_lda_f(p, f)
-            self.assertEqual(addr, 257)    # just "known" from data above
-            # this range of addresses and the related data is just "known"
-            # from the data bytes above
-            baseaddr = 0x800
-            for offset in range(9):
-                self.assertEqual(p.mmu.byteRW(baseaddr+offset), offset+1)
+
+        endblk_without = [
+            1, 0, 6, 0, 1, 1
+        ]
+
+        for tbytes in (ldabytes + endblk_with, ldabytes + endblk_without):
+            with io.BytesIO(bytes(tbytes)) as f:
+
+                addr = boot.load_lda_f(p, f)
+                self.assertEqual(addr, 257)    # just "known" from data above
+                # this range of addresses and the related data is just "known"
+                # from the data bytes above
+                baseaddr = 0x800
+                for offset in range(9):
+                    self.assertEqual(p.mmu.byteRW(baseaddr+offset), offset+1)
 
     def test_physrw_n(self):
         p = self.make_pdp()
