@@ -1043,7 +1043,13 @@ class PDP1170(PDP11):
         # everything into an octal string.
         if fmt is oct:
             for k, v in d.items():
-                pfx = '0' if v > 7 else ''
-                d[k] = pfx + oct(v)[2:]
+                try:
+                    pfx = '0' if v > 7 else ''
+                except TypeError:
+                    # Leave non-numeric values unmolested.
+                    # E.g., the "except PDPTrap" case for MMR2 reads
+                    pass
+                else:
+                    d[k] = pfx + oct(v)[2:]
 
         return d
