@@ -172,24 +172,21 @@ def boot_bin(p, fname, /, *, addr=0, deposit_only=False,
 
 
 def _must_read_n(f, n, zeroskip=False):
-    """read exactly n bytes from f; raise exception if can't. n==0 allowed.
+    """read exactly n (>0) bytes from f; raise exception if can't.
 
     If zeroskip is True (default: False), zero bytes will be discarded.
-    It is not legal to zeroskip with n == 0.
     """
-
-    if zeroskip and n == 0:
-        raise ValueError("zeroskip and n == 0")
+    if n == 0:
+        raise ValueError("n == 0 is not allowed")
 
     b = bytes()
-    if n > 0:
-        while zeroskip and (b := f.read(1)) == b'\00':
-            pass
+    while zeroskip and (b := f.read(1)) == b'\00':
+        pass
 
-        # b has one byte or none in it, depending on zeroskip
-        b += f.read(n - len(b))
-        if len(b) != n:
-            raise ValueError(f"needed {n} bytes; got {len(b)}")
+    # b has one byte or none in it, depending on zeroskip
+    b += f.read(n - len(b))
+    if len(b) != n:
+        raise ValueError(f"needed {n} bytes; got {len(b)}")
     return b
 
 
@@ -270,9 +267,12 @@ def get_lda_block(f):
 
     if count < 6:
         raise ValueError(f"header error, {count=}")
+    elif count == 6:
+        # an "END" block, which has no checksum.
+        return addr, bytes()
 
+    # count > 6
     b = _must_read_n(f, count-6)
-
     chksum = _must_read_n(f, 1)
     if (sum(header) + sum(b) + sum(chksum)) & 0xFF:
         raise ValueError(f"checksum mismatch, {header=}")
