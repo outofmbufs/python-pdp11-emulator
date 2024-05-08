@@ -160,6 +160,27 @@ class KL11:
         while True:
             s, addr = serversocket.accept()
 
+            dont_auth = bytes((0xff, 0xf4, 0x25))
+            s.sendall(dont_auth)
+
+            suppress_goahead = bytes((0xff, 0xfb, 0x03))
+            s.sendall(suppress_goahead)
+
+            dont_linemode = bytes((0xff, 0xfe, 0x22))
+            s.sendall(dont_linemode)
+
+            dont_new_env = bytes((0xff, 0xfe, 0x27))
+            s.sendall(dont_new_env)
+
+            will_echo = bytes((0xff, 0xfb, 0x01))
+            s.sendall(will_echo)
+
+            dont_echo = bytes((0xff, 0xfe, 0x01))
+            s.sendall(dont_echo)
+
+            noecho = bytes((0xff, 0xfd, 0x2d))
+            s.sendall(noecho)
+
             outthread = threading.Thread(target=_outloop, args=(self.tq, s))
             inthread = threading.Thread(target=_inloop, args=(s,))
 
