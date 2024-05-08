@@ -423,7 +423,7 @@ class PDP11:
         # Note that in all READ cases b6 will be the newb6 (reusable)
         if (b6 & 0o70) == 0:
             if justEA:
-                raise PDPTraps.AddressError
+                raise PDPTraps.ReservedInstruction    # validated via SIMH
 
             match b6 & 0o07, value, opsize:
                 case Rn, None, 2:
