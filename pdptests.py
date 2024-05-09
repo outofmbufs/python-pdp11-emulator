@@ -965,6 +965,111 @@ class TestMethods(unittest.TestCase):
                 trapexpected = i
             self.assertEqual(p.r[1], trapexpected)
 
+    def test_trapconditions(self):
+        # test various types of instruction sequences that should
+        # produce specific types of traps.
+
+        # The original code, which was also used in SIMH to
+        # generate/validate the expected test behavior of various
+        # illegal things...
+        #
+        # start:  mov $stack,sp
+        #
+        # / make the vector table
+        #         clr r1
+        #         mov $decrs,r2
+        #         mov $128.,r3
+        # vectloop:
+        #         mov r2,(r1)+
+        #         mov $PS7,(r1)+
+        #         tst (r2)+               / just incrementing r2 by 2
+        #         sob r3, vectloop
+        #
+        # / r4 is the magic for figuring out the trap
+        #         mov $128.,r4
+        #         jmp *$010000            / run the offending instructions
+        #
+        # The "decrs" is 128 "dec r4" instructions and each trap vector
+        # jumps to a corresponding place in the sequence so that at the end
+        # r4 becomes the trap number
+
+        # now make all that as shown above
+        startaddr = 0o1000
+        tsaddr = 0o10000
+        a = InstructionBlock()
+
+        # this is position-independent variation of original, because
+        # that's what pdpasmhelper (only) supports for forward refs
+        a.mov('pc', 'r0')
+        a.add(a.getlabel('stack', idxrel=True), 'r0')
+#        a.add(2, 'r0')
+        a.mov('r0', 'sp')
+        a.mov('r0', a.ptr(0o30000))
+
+        a.clr('r1')
+
+        # same shenanigans for decrs / pc-rel
+        a.mov('pc', 'r2')
+        a.add(a.getlabel('decrs', idxrel=True), 'r2')
+
+        a.mov(128, 'r3')
+        a.label('vectloop')
+        a.mov('r2', '(r1)+')
+        a.mov(0o340, '(r1)+')
+        a.tst('(r2)+')
+        a.sob('r3', 'vectloop')
+        a.mov(128, 'r4')
+        a.jmp(a.ptr(tsaddr))
+
+        # these are unnecessary but serve as a miscalculation barrier too
+        a.halt()
+        a.halt()
+        a.halt()
+
+        a.label('decrs')
+        for i in range(128):
+            a.dec('r4')
+
+        # it's just nicer to have a vector address, not a "vector number"
+        a.asl('r4')
+        a.asl('r4')
+        a.halt()
+
+        # room for a trivial stack
+        for _ in range(16):
+            a.literal(0)
+        a.label('stack')
+
+        # test vectors are: (inst-sequence, expected-trap)
+        testvectors = []
+
+        # JMP to a register is a ReservedInstruction 0o10 trap
+        t = InstructionBlock()
+        t.jmp('r0')
+        testvectors.append((list(t), 0o10))
+
+        # accessing an odd address is an AddressError 0o04
+        t = InstructionBlock()
+        t.clr('r0')
+        t.inc('r0')
+        t.tst('(r0)')
+        testvectors.append((list(t), 0o04))
+
+        # another test of the exact same thing, only different
+        t = InstructionBlock()
+        t.clr('r0')
+        t.tst('1(r0)')
+        testvectors.append((list(t), 0o04))
+
+        for insts, tx in testvectors:
+            with self.subTest(insts=insts, tx=tx):
+                p = self.make_pdp()
+                self.loadphysmem(p, list(a), startaddr)
+                self.loadphysmem(p, insts, tsaddr)
+                p.run(pc=startaddr)
+                self.assertEqual(tx, p.r[4])
+                self.assertEqual(p.r[6], a.getlabel('stack')+startaddr-4)
+
     def _make_updown(self, taddr, uaddr, kaddr, uphysdata=0o200000):
         # Makes the instruction blocks required for the mmu_updown tests.
         # This is separated out so (as described below) it becomes possible
