@@ -46,10 +46,17 @@ class KL11:
     SERVERHOST = ''
     SERVERPORT = 1170
 
-    def __init__(self, ub, baseaddr=KL11_DEFAULT):
+    def __init__(self, ub, /, *, baseaddr=KL11_DEFAULT, send_telnet=False):
+        """Initialize the emulated console. Listens on port 1170.
+
+        Argument send_telnet (True/False, default False): controls whether
+        RFC854 sequences to turn off echo, etc will be sent.
+        """
+
         self.addr = baseaddr
         self.ub = ub
         self.ub.register(ub.autobyte(self.klregs), baseaddr, 4)
+        self.send_telnet = send_telnet
 
         # output characters are just queued (via tq) to the output thread
         # input characters have to undergo a more careful 1-by-1
@@ -70,6 +77,30 @@ class KL11:
         # The socket server connection/listener
         self._t = threading.Thread(target=self._connectionserver, daemon=True)
         self._t.start()
+
+    def _telnetsequences(self, s):
+        """If telnet is being used to connect, turn off local echo etc."""
+
+        dont_auth = bytes((0xff, 0xf4, 0x25))
+        s.sendall(dont_auth)
+
+        suppress_goahead = bytes((0xff, 0xfb, 0x03))
+        s.sendall(suppress_goahead)
+
+        dont_linemode = bytes((0xff, 0xfe, 0x22))
+        s.sendall(dont_linemode)
+
+        dont_new_env = bytes((0xff, 0xfe, 0x27))
+        s.sendall(dont_new_env)
+
+        will_echo = bytes((0xff, 0xfb, 0x01))
+        s.sendall(will_echo)
+
+        dont_echo = bytes((0xff, 0xfe, 0x01))
+        s.sendall(dont_echo)
+
+        noecho = bytes((0xff, 0xfd, 0x2d))
+        s.sendall(noecho)
 
     def klregs(self, addr, cycle, /, *, value=None):
         if cycle == BusCycle.RESET:
@@ -159,6 +190,9 @@ class KL11:
 
         while True:
             s, addr = serversocket.accept()
+
+            if self.send_telnet:
+                self._telnetsequences(s)
 
             outthread = threading.Thread(target=_outloop, args=(self.tq, s))
             inthread = threading.Thread(target=_inloop, args=(s,))

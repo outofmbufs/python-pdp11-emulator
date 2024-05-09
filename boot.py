@@ -308,11 +308,12 @@ def boot_lda(p, fname, /, *, force_run=True, msg=None):
     return rawaddr
 
 
-def make_unix_machine(*, loglevel='INFO', drivenames=[], rk=False):
+def make_unix_machine(*, loglevel='INFO', drivenames=[],
+                      rk=False, telnet=False):
     p = PDP1170(loglevel=loglevel)
 
     p.associate_device(KW11(p.ub), 'KW')    # line clock
-    p.associate_device(KL11(p.ub), 'KL')    # console
+    p.associate_device(KL11(p.ub, send_telnet=telnet), 'KL')    # console
     if rk:
         p.associate_device(RK11(p.ub, *drivenames), 'RK')    # disk drive
     else:
@@ -343,6 +344,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--drive', action='append', default=[], dest='drives')
+    parser.add_argument('--telnet', action='store_true',
+                        help="Send RFC854 sequences to console on start")
     parser.add_argument('--rk', action='store_true')
     parser.add_argument('--instlog', action='store_true')
     parser.add_argument('--lda', action='store', default=None)
@@ -365,7 +368,7 @@ if __name__ == "__main__":
         else:
             runoptions['breakpoint'] = breakpoints.MultiBreakpoint(*bkpts)
 
-    p = make_unix_machine(**pdpoptions, rk=args.rk)
+    p = make_unix_machine(**pdpoptions, rk=args.rk, telnet=args.telnet)
 
     unixboot_options = {}
     if args.bootmsg:
