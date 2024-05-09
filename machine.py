@@ -468,15 +468,18 @@ class PDP11:
                     autocrement = 2     # regardless of opsize used above
                 extendedb6 = None       # force update below
 
-            # both autodecrement addrmode, PC - NOPE.
-            case 0, 0o40 | 0o50, 7:
-                # ... did the pdp11 fault on this?
-                raise PDPTraps.ReservedInstruction
-
-            # both autodecrement addrmodes, not PC
+            # both autodecrement addrmodes
             # note that bytes and -(SP) still decrement by 2
+            # notes for -(PC):
+            #     * SIMH allows it (causes tight loop of course)
+            #     * Some DEC manuals say "DO NOT USE THIS FORM"
+            #     * Some DEC manuals tell you that, like SP, the
+            #       -(PC) autodecrement will be 2, even for bytes.
+            # No DEC manuals (of those surveyed anyway) specify
+            # that -(PC) will trap in some way. So, it's allowed here.
+            #
             case 0, 0o40 | 0o50 as addrmode, Rn:
-                if Rn == self.SP:
+                if Rn == self.SP or Rn == self.PC:
                     autocrement = -2
                 elif addrmode == 0o50:
                     autocrement = -2
