@@ -8,12 +8,15 @@ from rk11 import RK11
 import breakpoints
 
 
-STDMSG = """\
+STDMSG_SOCKET = """\
 Starting PDP11; this window is NOT THE EMULATED PDP-11 CONSOLE.
 *** In another window, telnet/nc to localhost:1170 to connect.
     Terminal should be in raw mode. On a mac, this is a good way:
          (stty raw; nc localhost 1170; stty sane)
 """
+
+STDMSG_STDIN = """Starting PDP11\n"""
+STDMSG = None        # will get set to one or the other of the above
 
 
 def boot_hp(p, /, *, addr=0o10000, deposit_only=False, switches=0):
@@ -302,18 +305,20 @@ def boot_lda(p, fname, /, *, force_run=True, msg=None):
             return rawaddr
         addr = rawaddr - 1
 
-    if msg:
-        print(msg.format(STDMSG))
+    _bootmsg(msg)
     p.run(pc=addr)
     return rawaddr
 
 
 def make_unix_machine(*, loglevel='INFO', drivenames=[],
-                      rk=False, telnet=False):
+                      rk=False, telnet=False, use_stdin=False):
     p = PDP1170(loglevel=loglevel)
 
     p.associate_device(KW11(p.ub), 'KW')    # line clock
-    p.associate_device(KL11(p.ub, send_telnet=telnet), 'KL')    # console
+
+    console = KL11(p.ub, send_telnet=telnet, use_stdin=use_stdin)
+    p.associate_device(console, 'KL')
+
     if rk:
         p.associate_device(RK11(p.ub, *drivenames), 'RK')    # disk drive
     else:
@@ -326,11 +331,20 @@ def boot_unix(p, /, *, runoptions={}, diskboot=boot_hp, msg="{}\n"):
 
     # load, and execute, the key-in bootstrap
     diskboot(p)
-
-    if msg:
-        print(msg.format(STDMSG))
-
+    _bootmsg(msg)
     p.run(pc=0, **runoptions)
+
+
+def _bootmsg(msg):
+    """Print out optional message, formatting it with STDMSG too."""
+
+    # note: this is a hack but when doing stdin need \r which is mostly
+    # harmless when not doing stdin
+    if msg:
+        for c in msg.format(STDMSG):
+            if c == '\n':
+                print('\r', end='')
+            print(c, end='')
 
 
 # USE:
@@ -346,6 +360,8 @@ if __name__ == "__main__":
     parser.add_argument('--drive', action='append', default=[], dest='drives')
     parser.add_argument('--telnet', action='store_true',
                         help="Send RFC854 sequences to console on start")
+    parser.add_argument('--stdin', action='store_true',
+                        help="Console stdin/rawmode instead of socket")
     parser.add_argument('--rk', action='store_true')
     parser.add_argument('--instlog', action='store_true')
     parser.add_argument('--lda', action='store', default=None)
@@ -368,7 +384,8 @@ if __name__ == "__main__":
         else:
             runoptions['breakpoint'] = breakpoints.MultiBreakpoint(*bkpts)
 
-    p = make_unix_machine(**pdpoptions, rk=args.rk, telnet=args.telnet)
+    p = make_unix_machine(**pdpoptions, rk=args.rk,
+                          telnet=args.telnet, use_stdin=args.stdin)
 
     unixboot_options = {}
     if args.bootmsg:
@@ -377,19 +394,27 @@ if __name__ == "__main__":
     # the default boot messages are a bit hokey, in that they sort of
     # know that booting an rk is the older bootstrap and booting hp is
     # the newer unix bootstrap, but so be it. Specify --bootmsg to override.
+    if args.stdin:
+        window_textra = ""
+        window_textra2 = ""
+        STDMSG = STDMSG_STDIN
+    else:
+        window_textra = " in that OTHER window"
+        window_textra2 = "******* EVERYTHING TYPED HERE IS IGNORED *****\n"
+        STDMSG = STDMSG_SOCKET
+
     if args.rk:
         unixboot_options['diskboot'] = boot_rk
         if not args.bootmsg:
             unixboot_options['msg'] = "{}\n" + \
-                "At '@' prompt in that OTHER window, " + \
-                "(typically) type: unix\n" + \
-                "********* EVERYTHING TYPED HERE IS IGNORED *********"
+                f"At '@' prompt{window_textra}, " + \
+                f"(typically) type: unix\n{window_textra2}"
     else:
         if not args.bootmsg:
             unixboot_options['msg'] = "{}\n" + \
-                "There will be no prompt; type 'boot' in OTHER window\n" + \
+                f"There will be no prompt; type 'boot'{window_textra}\n" + \
                 "Then, at the ':' prompt, typically type: hp(0,0)unix\n" + \
-                "********* EVERYTHING TYPED HERE IS IGNORED *********"
+                f"{window_textra2}"
 
     if args.lda:
         boot_lda(p, args.lda)
