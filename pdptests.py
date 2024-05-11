@@ -1002,9 +1002,7 @@ class TestMethods(unittest.TestCase):
         # that's what pdpasmhelper (only) supports for forward refs
         a.mov('pc', 'r0')
         a.add(a.getlabel('stack', idxrel=True), 'r0')
-#        a.add(2, 'r0')
         a.mov('r0', 'sp')
-        a.mov('r0', a.ptr(0o30000))
 
         a.clr('r1')
 
