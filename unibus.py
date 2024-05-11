@@ -33,7 +33,7 @@ class UNIBUS:
 
     def __init__(self, cpu):
         self.cpu = cpu
-        self.intmgr = InterruptManager()
+        self.intmgr = InterruptManager(cpu)
         self.logger = cpu.logger
         self.mmiomap = [self.__nodev] * (self.cpu.IOPAGE_SIZE >> 1)
 

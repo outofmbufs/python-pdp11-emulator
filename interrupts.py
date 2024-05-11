@@ -39,6 +39,15 @@ PendingInterrupt = namedtuple(
     'PendingInterrupt', ('pri', 'vector', 'callback'))
 
 
+# This is a delicious hack so that the console can force a processor halt.
+# Notice the sneaky pri=8 (more than 0..7 in the architecture).
+# This phony 'halt interrupt' is unmaskable and outside the architecture.
+# Also note the (too clever?) use of the callback to invoke exit()
+# Think of this as the equivalent of the HALT toggle on the physical panel
+
+ProcessorHalt = PendingInterrupt(8, 0, exit)
+
+
 # Interrupts are priority sorted by pri (duh), but (less obviously)
 # two interrupts with the same pri are further priority sorted by
 # vector, with lower vector being higher priority. This calculation
@@ -80,10 +89,11 @@ def _qpri(pdi):
 # method simple_irq() bundles all this minutia up for the caller.
 
 class InterruptManager:
-    def __init__(self):
+    def __init__(self, cpu):
         self.pri_pending = 0
         self.requests = []
         self.condition = threading.Condition()
+        self.logger = cpu.logger    # only thing needed from cpu
 
     def simple_irq(self, pri, vector):
         """Pend an interrupt at the given pri/vector."""
@@ -107,6 +117,10 @@ class InterruptManager:
                     self.requests = sorted(self.requests + [irq], key=_qpri)
                     self.pri_pending = self.requests[-1].pri
             self.condition.notify_all()
+
+    def halt_toggle(self, msg=""):
+        self.logger.info(f"HALT TOGGLE, {msg=}")
+        self.pend_interrupt(ProcessorHalt)
 
     # called by the processor, to get one pending interrupt (if any).
     # An InterruptTrap with the highest priority is returned, IF it is
