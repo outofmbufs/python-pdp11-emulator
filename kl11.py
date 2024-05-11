@@ -22,12 +22,44 @@
 
 # simulation of a KL-11 console interface
 #
-# Trivial TCP server that accepts connections on port 1170 (cute)
-# and simply proxies character traffic back and forth.
+# There are two modes of operation: socket or stdin.
 #
+# socket: In socket mode, this starts a simple TCP server and accepts
+#         connections on port 1170 (cute). Characters a proxied back
+#         and forth from this socket to the emulated console
+#
+# stdin:  In stdin mode, python's stdin is usurped and put into raw mode.
+#         The python console is the emulated console. This mode
+#         requires termios ("unix only" but may exist on other systems)
+#
+#         In this mode there will be no way to kill/exit the emulation unless
+#         the running code halts. Alternatively, the input byte sequence:
+#                   0xC3 0xA7
+#         which is Unicode U+00E7, c--cedilla, will cause the emulation to
+#         halt as if the physical console HALT toggle had been selected.
+#         This sequence was chosen because it is option-C on a mac; see
+#                 HALT_BYTES
+#         to override this choice. NOTE: the first N-1 bytes of the HALT_BYTES
+#         will still be transmitted to the emulation, the HALT will only occur
+#         once the full sequence has been received.
+#
+
 import socket
 import threading
 import queue
+from contextlib import contextmanager
+
+# termios is only on unix-like/POSIX systems.
+# If there is no termios module then use_stdin mode is not available.
+try:
+    import termios
+except ModuleNotFoundError:
+    termios = None
+else:
+    # these are only needed for use_stdin, which also requires termios
+    import tty
+    import sys
+    import os
 
 from pdptraps import PDPTraps
 from unibus import BusCycle
@@ -46,17 +78,25 @@ class KL11:
     SERVERHOST = ''
     SERVERPORT = 1170
 
-    def __init__(self, ub, /, *, baseaddr=KL11_DEFAULT, send_telnet=False):
+    HALT_SEQUENCE = bytes((0xc3, 0xa7))
+
+    def __init__(self, ub, /, *, baseaddr=KL11_DEFAULT,
+                 send_telnet=False, use_stdin=False):
         """Initialize the emulated console. Listens on port 1170.
 
-        Argument send_telnet (True/False, default False): controls whether
-        RFC854 sequences to turn off echo, etc will be sent.
+        Argument use_stdin (True/False, default False) determines whether
+        a remote socket is used or stdin (python console). This only works
+        on python hosts with termios (generally any POSIX-like system)
+
+        If use_stdin is False, argument send_telnet (True/False, dflt False)
+        controls whether RFC854 sequences to turn off echo, etc will be sent.
         """
 
         self.addr = baseaddr
         self.ub = ub
         self.ub.register(ub.autobyte(self.klregs), baseaddr, 4)
         self.send_telnet = send_telnet
+        self.start_this = None
 
         # output characters are just queued (via tq) to the output thread
         # input characters have to undergo a more careful 1-by-1
@@ -74,8 +114,15 @@ class KL11:
         # transmit buffer status (address: baseaddr + 4)
         self.t_ienable = False
 
+        if use_stdin:
+            if not termios:
+                raise ValueError("Cannot use_stdin without termios module")
+            serverloop = self._stdindeferred
+        else:
+            serverloop = self._connectionserver
+
         # The socket server connection/listener
-        self._t = threading.Thread(target=self._connectionserver, daemon=True)
+        self._t = threading.Thread(target=serverloop, daemon=True)
         self._t.start()
 
     def _telnetsequences(self, s):
@@ -103,6 +150,10 @@ class KL11:
         s.sendall(noecho)
 
     def klregs(self, addr, cycle, /, *, value=None):
+        if self.start_this:
+            t, self.start_this = self.start_this, None
+            t.start()
+
         if cycle == BusCycle.RESET:
             self.rcdone = False
             self.r_ienable = False
@@ -161,8 +212,77 @@ class KL11:
 
         return value
 
+    def _stdindeferred(self):
+        # because the stdin method steals the console I/O, which hoses
+        # interactive use (if a KL11 has been set up), the start of the
+        # stdin thread is deferred until any first KL11 access.
+        self.start_this = threading.Thread(
+            target=self._stdinserver, daemon=True)
+
+    def _stdinserver(self):
+        """Server loop daemon thread for console I/O via stdin."""
+
+        @contextmanager
+        def _rawmode(fd):
+            saved = termios.tcgetattr(fd)
+            try:
+                tty.setraw(fd)
+                yield
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+
+        def _outloop(q, outf):
+            while True:
+                try:
+                    c = q.get(True, timeout=2)
+                    if c is self._SHUTDOWN_SENTINEL:
+                        break
+                except queue.Empty:
+                    pass
+                else:
+                    outf.write(c.encode())
+
+        def _inloop(inf):
+            in_halt_sequence = None
+            while len(c := inf.read(1)) != 0:
+                b = ord(c)
+                with self.rxc:
+                    if in_halt_sequence is None:
+                        if b == self.HALT_SEQUENCE[0]:
+                            in_halt_sequence = 1
+                    elif b == self.HALT_SEQUENCE[in_halt_sequence]:
+                        in_halt_sequence += 1
+                        if len(self.HALT_SEQUENCE) == in_halt_sequence:
+                            return
+                    else:
+                        in_halt_sequence = None
+
+                    self.rxc.wait_for(lambda: not self.rcdone)
+                    self.rdrbuf = b
+                    self.rcdone = True
+                    if self.r_ienable:
+                        self.ub.intmgr.simple_irq(pri=4, vector=0o60)
+
+        with _rawmode(sys.stdin.fileno()):
+            inf = os.fdopen(sys.stdin.fileno(), 'rb',
+                            buffering=0, closefd=False)
+            outf = os.fdopen(sys.stdout.fileno(), 'wb',
+                             buffering=0, closefd=False)
+
+            outthread = threading.Thread(target=_outloop, args=(self.tq, outf))
+            inthread = threading.Thread(target=_inloop, args=(inf,))
+
+            outthread.start()
+            inthread.start()
+
+            inthread.join()
+            self.tq.put(self._SHUTDOWN_SENTINEL)
+            outthread.join()
+
+        self.ub.intmgr.halt_toggle(f"CONSOLE HALT ({self.HALT_SEQUENCE})")
+
     def _connectionserver(self):
-        """Server loop daemon thread for console I/O."""
+        """Server loop daemon thread for console I/O via telnet/nc socket."""
         serversocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         serversocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         serversocket.bind((self.SERVERHOST, self.SERVERPORT))
