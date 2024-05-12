@@ -38,8 +38,8 @@
 #         which is Unicode U+00E7, c--cedilla, will cause the emulation to
 #         halt as if the physical console HALT toggle had been selected.
 #         This sequence was chosen because it is option-C on a mac; see
-#                 HALT_BYTES
-#         to override this choice. NOTE: the first N-1 bytes of the HALT_BYTES
+#                 HALT_SEQUENCE
+#         to override this choice. NOTE: the first N-1 HALT_SEQUENCE bytes
 #         will still be transmitted to the emulation, the HALT will only occur
 #         once the full sequence has been received.
 #
@@ -250,6 +250,8 @@ class KL11:
                     if in_halt_sequence is None:
                         if b == self.HALT_SEQUENCE[0]:
                             in_halt_sequence = 1
+                            if len(self.HALT_SEQUENCE) == 1:
+                                return
                     elif b == self.HALT_SEQUENCE[in_halt_sequence]:
                         in_halt_sequence += 1
                         if len(self.HALT_SEQUENCE) == in_halt_sequence:
