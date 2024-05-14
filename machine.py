@@ -277,7 +277,7 @@ class PDP11:
         # start off in halted state until .run() happens
         self.halted = True
 
-        # device instances; see add_device
+        # device instances; see associate_device
         self.devices = {}
 
     def physRW(self, physaddr, value=None):
@@ -435,8 +435,7 @@ class PDP11:
                 case Rn, bv, 1:
                     # NOTE: The MOVB instruction has different semantics
                     #       than this; it is coded explicitly in op11_movb()
-                    self.r[Rn] &= 0o177400
-                    self.r[Rn] |= (bv & 0o377)
+                    self.r[Rn] = (self.r[Rn] & 0o177400) | (bv & 0o377)
             return (value, b6) if rmw else value
 
         # harder cases
