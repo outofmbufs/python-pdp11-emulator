@@ -29,8 +29,10 @@ from branches import branch
 
 def op_halt(cpu, inst):
     if cpu.psw_curmode != cpu.KERNEL:
-        # strange trap, but that's what it says
-        raise PDPTraps.AddressError(cpu.CPUERR_BITS.ILLHALT)
+        # In the 1979 PDP-11/70 handbook it says trap 4 for non-kernel HALT.
+        # An 11/40 book says trap 10 (ReservedInst, makes more sense).
+        # SIMH says trap 10. Going with that.
+        raise PDPTraps.ReservedInstruction(cpu.CPUERR_BITS.ILLHALT)
     cpu.halted = True
 
 
