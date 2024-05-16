@@ -94,7 +94,7 @@ The tty in which python is running will be placed into raw mode and all input wi
 
 1. No control-C / SIGINT capability. If stdin is being used as the console, there will be no way to send a control-C or "abort" (or "break" or "SIGINT" or whatever it is called on your system). Any of those characters will simply become input to the emulation with no effect on the python interpreter. To work around this, the emulation looks for the unicode character c-cedilla ('ç' Unicode U+00E7; on a mac keyboard this can be typed using option-c). If that character is encountered the emulation is hard-halted, as if a user had hit the HALT toggle on a physical panel on a real machine.
 
-2. Partly because of #1, character input processing by the KL11 is not started at device instantiation time; it does not happen until the first I/O access to any KL11 device register occurs in the emulated environment. Prior to that, control-c (and other such host special characters) will work correctly. This deferral will be completely transparent to any emulated program.
+2. Partly because of #1, when use_stdin is True character input processing by the KL11 is not started at device instantiation time; it does not happen until the first I/O access to any KL11 device register occurs in the emulated environment. Prior to that, control-c (and other such host special characters) will work correctly. This deferral will be completely transparent to any emulated program.
 
 
 ## To boot UNIX:
@@ -161,7 +161,7 @@ I'll have to write more about this later; as a first step to getting around:
 * machine.py is the heart of the instruction loop and CPU basics.
 * Actual machine instructions have been split off - start with op4.py and trace the opparsing/dispatch from there.
 * mmu.py implements, surprisingly enough, the PDP-11 MMU system.
-* mmio.py and unibus.py (mostly a stub) handle the memory mapped I/O.
+* unibus.py handles the memory mapped Unibus I/O.
 * rp.py is a primitive disk emulation, good enough for unix.
 * kl11.py is the console
 * kw11.py is the line clock
