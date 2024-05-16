@@ -40,7 +40,7 @@ from pdpasmhelper import InstructionBlock
 
 class TestMethods(unittest.TestCase):
 
-    PDPLOGLEVEL = 'WARNING'
+    PDPLOGLEVEL = 'DEBUG'
 
     # used to create various instances, collects all the options
     # detail into this one place... mostly this is about loglevel
@@ -195,6 +195,59 @@ class TestMethods(unittest.TestCase):
         for w in postmmu:
             a.literal(w)
         a.halt()
+
+        instloc = 0o4000             # 2K
+        self.loadphysmem(p, a, instloc)
+        return p, instloc
+
+    def u64mapped_pdp(self, p=None, /):
+        # Make a PDP11 with:
+        #   * kernel space mapped to first 56K of memory (straight through)
+        #   * top of kernel space mapped to I/O page
+        #   * 64KB of user space mapped to phys 64K-128K
+        #
+        # No I/D separation.
+        #
+        if p is None:
+            p = self.make_pdp()
+
+        cn = self.usefulconstants()
+
+        a = InstructionBlock()
+        a.mov(0o160000, 'sp')           # start system stack at top of K mem
+
+        # kernel segs 0 .. 6 to physical zero .. 56K
+        a.mov(cn.KISA0, 'r4')
+        for i in range(7):
+            a.mov((i * 8192) >> 6, '(r4)+')
+
+        # kernel seg 7 to I/O page
+        a.mov(0o776000 >> 6, '(r4)')
+
+        # user segs 0 .. 7 to physical 64K .. 128K
+        a.mov(cn.UISA0, 'r4')
+        for i in range(8):
+            a.mov((65536 + (i * 8192)) >> 6, '(r4)+')
+
+        # set K and U PDRs
+        # 77406 = PDR<2:0> = ACF = 0o110 = read/write
+        #         PLF<14:8> =0o0774 = full length (128*64 bytes = 8K)
+
+        a.mov(0o77406, 'r0')
+
+        a.mov(cn.KISD0, 'r4')
+        for i in range(8):
+            a.mov('r0', '(r4)+')
+
+        a.mov(cn.UISD0, 'r4')
+        for i in range(8):
+            a.mov('r0', '(r4)+')
+
+        # turn on relocation mode ...
+        a.inc(a.ptr(cn.MMR0))
+
+        # and halt
+        a.literal(0)
 
         instloc = 0o4000             # 2K
         self.loadphysmem(p, a, instloc)
@@ -1117,6 +1170,50 @@ class TestMethods(unittest.TestCase):
         h.update(bytes(bytify()))
 
         self.assertEqual(good, h.hexdigest())
+
+    def test_pcwrap(self):
+        # tests that the PC correctly wraps 0177776 --> 0
+        p, a = self.u64mapped_pdp()
+        p.run(pc=a)
+
+        # put machine into USER mode, clear all registers (on principle)
+        # NOTE: DO NOT BASH p.psw_curmode directly, that bypasses all
+        #       the KSP vs USP magic
+        p.psw = (p.USER << 14)
+
+        for i in range(8):
+            p.r[i] = 0
+
+        # jam a MOV R2,R3 instruction at the end of user space
+        # and a MOV R3,R4 instruction at location 0
+        # The test verifies these correctly wrapped around
+        p.mmu.wordRW(0o177776, 0o010203)
+        p.mmu.wordRW(0, 0o010304)
+
+        # NOTE ... when PC reaches location 2, it executes a HALT (0).
+        # This causes a ReservedInstruction trap in user mode. Since
+        # none of the vectors have been filled in, control will transfer
+        # (in KERNEL mode, because PSW in vector is zero) to location 0,
+        # where it will find another HALT instruction (i.e., 0) and stop.
+        # So all this works without making more scaffolding for that...
+
+        # this magic number MUST be negative because the N bit is
+        # also checked in the saved PSW check below.
+        magic = 0o123321
+        p.r[2] = magic
+        p.run(pc=0o177776)
+
+        # both MOV instructions should have executed
+        self.assertEqual(p.r[2], magic)
+        self.assertEqual(p.r[3], magic)
+        self.assertEqual(p.r[4], magic)
+
+        # the ReservedInstruction trap should have put the (user) PC
+        # value which is 2 past the halt instruction (i.e., 4) on stack
+        self.assertEqual(p.mmu.wordRW(0o160000 - 4), 4)
+
+        # and the saved PSW which should be plain user mode, N-bit
+        self.assertEqual(p.mmu.wordRW(0o160000 - 2), (p.USER << 14) | 0o10)
 
     def test_trap(self):
         # test some traps
