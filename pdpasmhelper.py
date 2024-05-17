@@ -238,6 +238,9 @@ class PDP11InstructionAssembler:
     def dec(self, dst):
         return self._1op(0o005300, dst)
 
+    def decb(self, dst):
+        return self._1op(0o105300, dst)
+
     def neg(self, dst):
         return self._1op(0o005400, dst)
 
@@ -246,6 +249,9 @@ class PDP11InstructionAssembler:
 
     def tst(self, dst):
         return self._1op(0o005700, dst)
+
+    def tstb(self, dst):
+        return self._1op(0o105700, dst)
 
     def swab(self, dst):
         return self._1op(0o000300, dst)
