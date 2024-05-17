@@ -169,7 +169,12 @@ def op00_56_sbc(cpu, inst, opsize=2):
 def op00_57_tst(cpu, inst, opsize=2):
     """TST(B) (determined by opsize). Test destination."""
     dst = inst & 0o77
-    val = cpu.operandx(dst, opsize=opsize)
+    if dst < 8:
+        val = cpu.r[dst]
+        if opsize == 1:
+            val &= 0o377
+    else:
+        val = cpu.operandx(dst, opsize=opsize)
     cpu.psw_n = (val & cpu.SIGN816[opsize])
     cpu.psw_z = (val == 0)
     cpu.psw_v = 0
