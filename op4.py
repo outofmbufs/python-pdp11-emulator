@@ -67,20 +67,22 @@ def op01_mov(cpu, inst):
 
     # avoid call to the more-general operandx for mode 0, direct register.
     # This optimization is a substantial speed up for register MOVs.
-    if (inst & 0o7000) == 0:
-        val = cpu.r[(inst & 0o700) >> 6]
+    srcb6 = (inst & 0o7700) >> 6
+    if srcb6 < 8:
+        val = cpu.r[srcb6]
     else:
-        val = cpu.operandx((inst & 0o7700) >> 6)
+        val = cpu.operandx(srcb6)
 
     cpu.psw_v = 0              # per manual; V is cleared
     cpu.psw_z = (val == 0)
     cpu.psw_n = (val > 32767)
 
     # same optimization on the write side.
-    if (inst & 0o70) == 0:
-        cpu.r[(inst & 0o07)] = val
+    dstb6 = (inst & 0o77)
+    if dstb6 < 8:
+        cpu.r[dstb6] = val
     else:
-        cpu.operandx(inst & 0o0077, val)
+        cpu.operandx(dstb6, val)
 
 
 # This is ALWAYS an 8-bit MOVB
@@ -89,10 +91,11 @@ def op11_movb(cpu, inst):
 
     # avoid call to the more-general operandx for mode 0, direct register.
     # This optimization is a substantial speed up for register MOVs.
-    if (inst & 0o7000) == 0:
-        val = cpu.r[(inst & 0o700) >> 6] & 0o377
+    srcb6 = (inst & 0o7700) >> 6
+    if srcb6 < 8:
+        val = cpu.r[srcb6] & 0o377
     else:
-        val = cpu.operandx((inst & 0o7700) >> 6, opsize=1)
+        val = cpu.operandx(srcb6, opsize=1)
 
     cpu.psw_v = 0
     cpu.psw_z = (val == 0)
@@ -101,13 +104,13 @@ def op11_movb(cpu, inst):
     # avoid call to the more-general operandx for mode 0, direct register
     # not only as an optimization, but because unlike other byte operations
     # in register-direct mode, MOVB does a sign-extend.
-    dst = inst & 0o0077
-    if (dst < 8):             # i.e., mode 0
+    dstb6 = inst & 0o0077
+    if (dstb6 < 8):             # i.e., mode 0
         if val > 127:
             val |= 0o177400
-        cpu.r[dst] = val
+        cpu.r[dstb6] = val
     else:
-        cpu.operandx(dst, val, opsize=1)
+        cpu.operandx(dstb6, val, opsize=1)
 
 
 def op02_cmp(cpu, inst, opsize=2):
