@@ -115,8 +115,21 @@ def op11_movb(cpu, inst):
 
 def op02_cmp(cpu, inst, opsize=2):
     """CMP(B) src,dst"""
-    src = cpu.operandx((inst & 0o7700) >> 6, opsize=opsize)
-    dst = cpu.operandx(inst & 0o0077, opsize=opsize)
+    srcb6 = (inst & 0o7700) >> 6
+    dstb6 = (inst & 0o0077)
+
+    # this is a bold "just go for it" strategy to optimize reg-reg compares
+    try:
+        src = cpu.r[srcb6]
+        dst = cpu.r[dstb6]
+    except IndexError:
+        if srcb6 > 7:
+            src = cpu.operandx(srcb6, opsize=opsize)
+        dst = cpu.operandx(dstb6, opsize=opsize)
+    else:
+        if opsize == 1:
+            src &= 0o377
+            dst &= 0o377
 
     # note: this is other order than SUB
     t = (src - dst) & cpu.MASK816[opsize]
@@ -173,8 +186,19 @@ def op05_bis(cpu, inst, opsize=2):
 
 def op06_add(cpu, inst):
     """ADD src,dst"""
-    src = cpu.operandx((inst & 0o7700) >> 6)
-    dst, xb6 = cpu.operandx(inst & 0o0077, rmw=True)
+    # avoid call to the more-general operandx for mode 0, direct register.
+    srcb6 = (inst & 0o7700) >> 6
+    if srcb6 < 8:
+        src = cpu.r[srcb6]
+    else:
+        src = cpu.operandx(srcb6)
+
+    dstb6 = inst & 0o0077
+    if dstb6 < 8:
+        dst = cpu.r[dstb6]
+        xb6 = dstb6
+    else:
+        dst, xb6 = cpu.operandx(dstb6, rmw=True)
     t = src + dst
 
     cpu.psw_c = (t > cpu.MASK16)
@@ -191,7 +215,10 @@ def op06_add(cpu, inst):
     t_sign = t & cpu.SIGN16
     cpu.psw_v = (dst_sign != t_sign) and (src_sign == dst_sign)
 
-    cpu.operandx(xb6, t)
+    if dstb6 < 8:
+        cpu.r[dstb6] = t
+    else:
+        cpu.operandx(xb6, t)
 
 
 def op16_sub(cpu, inst):
