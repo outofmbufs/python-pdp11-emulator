@@ -129,6 +129,7 @@ class PDP11:
 
     # System ID register
     SYSTEMID_OFFS = 0o17764
+    SYSTEMID_DFLT = 0x666                # this is arbitrary? simh: 0x1234
 
     # the CPU error register and some useful bit values
     CPUERROR_OFFS = 0o17766
@@ -243,7 +244,7 @@ class PDP11:
                                ('swleds', self.SWLEDS_OFFS),
                                ('breakreg', self.MICROPROG_BREAK_REG),
                                ('lowersize', self.LOWERSIZE_OFFS),
-                               ('uppersize', self.UPPERSIZE_OFFS),
+                               (None, self.UPPERSIZE_OFFS),  # dummy always 0
                                ('systemID', self.SYSTEMID_OFFS),
                                ('error_register', self.CPUERROR_OFFS),
                                ('logging_hack', self.LOGGING_OFFS)):
@@ -253,6 +254,7 @@ class PDP11:
         self.swleds = 0
         self.error_register = 0    # CPU Error register per handbook
         self.breakreg = 0          # microprogram break register (diags)
+        self.systemID = self.SYSTEMID_DFLT
 
         # NOTE: The cold machine starts out in stack limit violation.
         # (stack pointer = 0). However, the limit semantics only apply
