@@ -55,10 +55,10 @@ from pdptraps import PDPTraps
 
 
 def d3dispatcher(d3table, cpu, inst):
-    opf = d3table[(inst & 0o7000) >> 9]
-    if opf is None:
-        raise PDPTraps.ReservedInstruction
-    opf(cpu, inst)
+    try:
+        d3table[(inst & 0o7000) >> 9](cpu, inst)
+    except TypeError:              # means a None was in d3table
+        raise PDPTraps.ReservedInstruction from None
 
 
 # This is ALWAYS a 16-bit MOV
