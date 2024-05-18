@@ -180,7 +180,7 @@ The module `pdptests.py` can be used to run performance tests, like this:
 
     python3 pdptests.py -p
 
-By default it measures 1 million MOV R1,R0 instructions. On a 2022 Macbook Air (M2) this takes about 25 seconds (speed dependent on python version). It will show something like:
+By default it measures, using the timeit module, 1 million MOV R1,R0 instructions (repeated 50 times, reporting the best result). On a 2022 Macbook Air (M2) this takes about 25 seconds (speed dependent on python version). It will show something like:
 
     % python3 pdptests.py -p
     Instruction ['010100'] took 481.5 nsecs
