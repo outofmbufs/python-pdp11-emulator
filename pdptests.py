@@ -691,6 +691,28 @@ class TestMethods(unittest.TestCase):
         self.check16(p)
         self.assertEqual(p.r[2], 1)
 
+    def test_byteops(self):
+        # more tests of various byte operations
+        # r2 counts test progress
+        a = InstructionBlock()
+        a.clr('r2')
+        a.mov(0o177400, 'r0')
+        a.tstb('r0')
+        a.bne('fail')
+        a.inc('r2')
+        a.decb('r0')
+        a.cmp(0o0177777, 'r0')
+        a.bne('fail')
+        a.inc('r2')
+        a.halt()
+        a.label('fail')
+        a.halt()
+        p = self.make_pdp()
+        instloc = 0o4000
+        self.loadphysmem(p, a, instloc)
+        p.run(pc=instloc)
+        self.assertEqual(p.r[2], 2)
+
     def test_br(self):
         # though the bug has been fixed, this is a test of whether
         # all branch offset values work correctly. Barn door shut...
