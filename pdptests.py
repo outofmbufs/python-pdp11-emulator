@@ -40,7 +40,7 @@ from pdpasmhelper import InstructionBlock
 
 class TestMethods(unittest.TestCase):
 
-    PDPLOGLEVEL = 'DEBUG'
+    PDPLOGLEVEL = 'INFO'
 
     # used to create various instances, collects all the options
     # detail into this one place... mostly this is about loglevel
@@ -2706,64 +2706,74 @@ class TestMethods(unittest.TestCase):
         #     are all just dummied up right now
 
     # this is not a unit test, invoke it using timeit etc
-    def speed_test_setup(self, *, loopcount=200, mmu=True, inst=None):
-        """Set up a test run of 50*loopcount inst instructions.
+    def speed_test_setup(self, instwords, /, *, loopcount=200, mmu=True):
+        """Set up a test run of the instwords (1 word or 2)
+        Returns tuple: p, pc, per .. see speed_test_run()
 
-        Returns tuple: p, pc
+        If len(instwords) is 1, make a loop of 49 instructions and one SOB
+        If len == 2 (i.e., an instruction + operand), 24 instructions + SOB
         """
 
-        p, pc = self.simplemapped_pdp()
+        p, pc = self.u64mapped_pdp()
 
         # the returned pdp is loaded with instructions for setting up
         # the mmu; only do them if that's what is wanted
         #
         # NOTE: the test code is run in USER mode Because Reasons
         # (was experimenting with virtual caches and this was helpful).
-        # The test code will run at (virtual/user) 0 when the MMU is
-        # enabled, or its physical location (0o20000) when off.
 
-        user_physloc = 0o20000
         if mmu:
-            p.run(pc=pc)         # set up all those mappings
-            usermode_base = 0    # physical 0o20000 maps here in USER mode
+            p.run(pc=pc)             # set up all those mappings
+            usermode_base = 0o10000  # phys 0o210000 maps here in USER mode
+            user_physloc = 0o210000
         else:
+            user_physloc = 0o20000
             usermode_base = user_physloc
 
-        # by default the instruction being timed will be MOV R1,R0
-        # but other instructions could be used. MUST ONLY BE ONE WORD
-        if inst is None:
-            inst = 0o010100
-
         # this is the tiny kernel code used to set up and start
-        # each iteration of the user mode timing code. It slightly
-        # distorts the per-instruction overhead of course. C'est la vie.
+        # each major iteration of the user mode timing code. The one-time
+        # overhead of these few instructions is irrelevant in the timing test.
         k = InstructionBlock()
         k.mov(0o20000, 'sp')           # establish proper kernel stack
         k.mov(0o140340, '-(sp)')       # USER mode, no interrupts
         k.mov(usermode_base, '-(sp)')  # pc start for loop/USER code
+        # these environmental "knowns" are available for the test inst
+        k.mov(0o1000, 'r5')            # usable writeable addr
+        k.clr('r0')
+        k.clr('r1')
         k.rtt()                        # off to the races!
 
         kloc = 0o4000
         for a2, w in enumerate(k):
             p.mmu.wordRW(kloc + (2 * a2), w)
 
-        # The test timing loop... 49 "inst" instructions
-        # and an SOB for looping (so 50 overall instructions per loop)
+        if len(instwords) == 1:
+            per = 49
+        elif len(instwords) == 2:
+            per = 24
+        else:
+            raise ValueError("instwords must be a list of length 1 or 2")
+
+        # The test timing loop: N instructions and an SOB
+        # NOTE: The instructions must not exxceed SOB branch reach
         a = InstructionBlock()
         a.mov(loopcount, 'r4')
         a.label('LOOP')
-        for i in range(49):
-            a.literal(inst)
+        for i in range(per):
+            for w in instwords:
+                a.literal(w)
         a.sob('r4', 'LOOP')
         a.halt()
 
         for a2, w in enumerate(a):
             p.physRW(user_physloc + (2 * a2), w)
 
-        return p, kloc
+        # per+1 will be 50 (len(instwords) == 1) or 25 ( == 2)
+        return p, kloc, per+1
 
     def speed_test_run(self, p, instloc):
         """See speed_test_setup"""
+        p.psw = 0
         p.run(pc=instloc)
 
 
@@ -2771,42 +2781,78 @@ if __name__ == "__main__":
     import argparse
     import timeit
 
-    movr1r0 = 0o010100
+    def asminst(s):
+        try:
+            return [asmint(s)]
+        except ValueError:        # if, e.g., 'MOV r0,r1' instead of '010001'
+            pass
+
+        # all of these things can raise exceptions if the string is
+        # ill-formatted, and that's perfectly fine (causes arg rejection)
+        mnem, s2 = s.split()
+        a = InstructionBlock()
+        asmmeth = getattr(a, mnem.lower())
+        asmmeth(*s2.split(','))
+        return list(a)
+
+    def asmint(s):
+        digits = '0123456789'
+        if s.startswith('0o'):
+            base = 8
+            s = s[2:]
+            digits = '01234567'
+        elif s.startswith('0x'):
+            base = 16
+            s = s[2:]
+            digits += 'abcdef'
+        elif s[-1] == '.':
+            base = 10
+            s = s[:-1]
+        else:
+            base = 8
+        place = 1
+        v = 0
+        for d in reversed(s.lower()):
+            dv = digits.index(d)           # ValueError for bad digits
+            v += (dv * place)
+            place *= base
+        return v
+
+    movr1r0 = [0o010100]
 
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--performance', action="store_true")
-    parser.add_argument('-i', '--instruction', default=movr1r0, type=int)
+    parser.add_argument('-i', '--instruction', default=movr1r0, type=asminst,
+                        help="Test instruction, in octal. E.g.: 010203")
     parser.add_argument('--nommu', action="store_true")
-    parser.add_argument('--clr', action="store_true")
     parser.add_argument('tests', nargs="*")
     args = parser.parse_args()
 
     if args.performance:
-        # the goal is to execute inst 1M times. The loop executes 49 inst
-        # instructions and 1 sob (which taken together are considered as 50).
-        # Want to drive "number=" up more than loopcount, so use
-        #    loopcount=20     ... means "1000" inst instructions
-        #    number=1000       ... do that 1000 times, for 1M instructions
+        # If the instruction is 1 word the loop will be 49 instructions
+        # and one SOB, considered as 50 instructions.
+        # If the instruction is 2 words it will be 24 instructions + SOB,
+        # considered as 25 instructions.
 
-        # simple way to test CLR instruction vs default MOV.
-        # The CLR instruction is not optimized the way MOV is so
-        # this shows the difference.
-        if args.clr:
-            args.instruction = 0o005000
+        # the goal is to execute inst 1M times. The loop executes 'per'
+        # instructions and 1 sob; Want to drive "number=" up more than
+        # loopcount, so use
+        #    loopcount=20     ... means 20*per instructions
+        #    number=1000000/(loopcount*per)
+        #
+        # number will be 1000 for 1 instruction word, or 2000 for 2.
 
         t = TestMethods()
         mmu = not args.nommu
-        inst = args.instruction
-        p, pc = t.speed_test_setup(loopcount=20, inst=inst, mmu=mmu)
+        instwords = args.instruction
+        loopcount = 20
+        p, pc, per = t.speed_test_setup(
+            instwords, loopcount=loopcount, mmu=mmu)
+        number = 1000000 // (loopcount * per)
         ta = timeit.repeat(stmt='t.speed_test_run(p, pc)',
-                           number=1000, globals=globals(), repeat=50)
+                           number=number, globals=globals(), repeat=50)
         tnsec = round(1000 * min(*ta), 1)
-        if args.instruction == movr1r0:
-            instr = 'MOV R1,R0'
-        elif (args.instruction & 0o177770) == 0o005000:
-            instr = f'CLR R{args.instruction & 7}'
-        else:
-            instr = oct(args.instruction)
-        print(f"Instruction {instr} took {tnsec} nsecs")
+        ws = list(map(lambda w: f"{oct(w)[2:]:0>6s}", args.instruction))
+        print(f"Instruction {ws} took {tnsec} nsecs")
     else:
         unittest.main()
