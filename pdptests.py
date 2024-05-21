@@ -711,6 +711,7 @@ class TestMethods(unittest.TestCase):
         instloc = 0o4000
         self.loadphysmem(p, a, instloc)
         p.run(pc=instloc)
+        self.check16(p)
         self.assertEqual(p.r[2], 2)
 
     def test_br(self):
@@ -1065,6 +1066,7 @@ class TestMethods(unittest.TestCase):
         self.loadphysmem(p, a, instloc)
         self.loadphysmem(p, simhdata, 0o20000)
         p.run(pc=instloc)
+        self.check16(p)
         self.assertEqual(p.r[3], 0)
 
     def test_div(self):
@@ -1224,6 +1226,7 @@ class TestMethods(unittest.TestCase):
         magic = 0o123321
         p.r[2] = magic
         p.run(pc=0o177776)
+        self.check16(p)
 
         # both MOV instructions should have executed
         self.assertEqual(p.r[2], magic)
@@ -1466,6 +1469,7 @@ class TestMethods(unittest.TestCase):
                 self.loadphysmem(p, list(a), startaddr)
                 self.loadphysmem(p, insts, tsaddr)
                 p.run(pc=startaddr)
+                self.check16(p)
                 self.assertEqual(tx, p.r[4])
                 self.assertEqual(p.r[6], a.getlabel('stack')+startaddr-4)
 
