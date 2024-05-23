@@ -146,11 +146,10 @@ class InterruptManager:
         return InterruptTrap(irq.pri, irq.vector)
 
     def waitstate(self, processor_pri):
-        """Sit idle until any interrupt happens."""
+        """Sit idle until an interrupt of sufficient priority happens."""
         with self.condition:
-            if self.pri_pending > processor_pri:
-                return
-            self.condition.wait_for(lambda: self.pri_pending)
+            while self.pri_pending <= processor_pri:
+                self.condition.wait()
 
 
 if __name__ == "__main__":
