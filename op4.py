@@ -68,9 +68,9 @@ def op01_mov(cpu, inst):
     # avoid call to the more-general operandx for mode 0, direct register.
     # This optimization is a substantial speed up for register MOVs.
     srcb6 = (inst & 0o7700) >> 6
-    if srcb6 < 8:
-        val = cpu.r[srcb6]
-    else:
+    try:
+        val = cpu.r[srcb6]     # only works if srcb6 < 8; register direct
+    except IndexError:
         val = cpu.operandx(srcb6)
 
     cpu.psw_v = 0              # per manual; V is cleared
