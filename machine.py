@@ -626,17 +626,16 @@ class PDP11:
         # (as defined by hardware book)
         lim = self.stack_limit_register or 0o400
         if self.r[self.SP] < lim:
-            if not (self.straps & self.STRAPBITS.YELLOW):
-                self.logger.info(f"YELLOW ZONE, {list(map(oct, self.r))}")
-
-            # how about red?
-            if self.r[self.SP] + 32 < lim:    # uh oh - below the yellow!
+            mstr = self.machinestate(fmt=oct)
+            if self.r[self.SP] + 32 < lim:    # is it red?
                 # this is a red zone trap which is immediate
                 # the stack pointer is set to location 4
                 # and this trap is executed
                 self.r[self.SP] = 4             # !! just enough room for...
+                self.logger.warning(f"RED ZONE, {mstr}")
                 raise PDPTraps.AddressError(cpuerr=self.CPUERR_BITS.REDZONE)
             else:
+                self.logger.info(f"YELLOW ZONE, {mstr}")
                 self.straps |= self.STRAPBITS.YELLOW
 
     def get_synchronous_trap(self, abort_trap):
