@@ -102,7 +102,7 @@ class TestMethods(unittest.TestCase):
         """Verifies no illegal values ended up in physical memory or regs."""
         for a, w in enumerate(p.physmem):
             if w < 0 or w > 65535:
-                raise ValueError(f"Illegal physmem value {w} @ {oct(a<<2)}")
+                raise ValueError(f"Illegal physmem value {w} @ {oct(a<<1)}")
         for r, w in enumerate(p.r):
             if w < 0 or w > 65535:
                 raise ValueError(f"Illegal reg value {w} @ {r}")
