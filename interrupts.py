@@ -106,16 +106,17 @@ class InterruptManager:
             if not self.requests:
                 self.requests = [irq]
                 self.pri_pending = irq.pri
-            else:
+            elif irq in self.requests:
                 # multiple identical requests are not pended
                 # (it works this way in the hardware too of course --
                 #  if a device has asserted the interrupt request line
                 #  but that request hasn't been acknowledged/cleared by
                 #  by the bus signal protocol yet, you can't assert the
                 #  same interrupt line again ... it's already asserted)
-                if irq not in self.requests:
-                    self.requests = sorted(self.requests + [irq], key=_qpri)
-                    self.pri_pending = self.requests[-1].pri
+                return       # NOTE: NO NEED TO notify_all()
+            else:
+                self.requests = sorted(self.requests + [irq], key=_qpri)
+                self.pri_pending = self.requests[-1].pri
             self.condition.notify_all()
 
     def halt_toggle(self, msg=""):
