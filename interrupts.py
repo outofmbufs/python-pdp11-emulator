@@ -93,7 +93,7 @@ class InterruptManager:
         self.pri_pending = 0
         self.requests = []
         self.condition = threading.Condition()
-        self.logger = cpu.logger    # only thing needed from cpu
+        self.logger = cpu.logger
 
     def simple_irq(self, pri, vector):
         """Pend an interrupt at the given pri/vector."""
@@ -158,8 +158,16 @@ if __name__ == "__main__":
     from functools import partial
 
     class TestMethods(unittest.TestCase):
+        def make_interrupt_manager(self):
+            # InterruptManager() wants a cpu but (at least at the time
+            # of these tests being written) the only thing it uses from
+            # there is the .logger attribute; so scaffold all that up:
+            CPU_SKELETON = namedtuple('CPU_SKELETON', ['logger'])
+            cpu = CPU_SKELETON(logger=lambda s: None)
+            return InterruptManager(cpu)
+
         def test__init__(self):
-            IM = InterruptManager()
+            IM = self.make_interrupt_manager()
 
             # initial state starts with no pending interrupts
             self.assertEqual(IM.pri_pending, 0)
@@ -168,7 +176,7 @@ if __name__ == "__main__":
             self.assertEqual(IM.get_pending(0), None)
 
         def test_queue1(self):
-            IM = InterruptManager()
+            IM = self.make_interrupt_manager()
             test_pri = 4      # arbitrary
             test_vec = 17     # arbitrary
             IM.simple_irq(test_pri, test_vec)
@@ -252,7 +260,7 @@ if __name__ == "__main__":
                  ('GET', None)),
             )
             for tp in testprogs:
-                IM = InterruptManager()
+                IM = self.make_interrupt_manager()
                 self._actions(IM, tp)
 
         def test_vectorcallback(self):
@@ -261,7 +269,7 @@ if __name__ == "__main__":
 
             foodict = {}
             pfoo = partial(foo, foodict)
-            IM = InterruptManager()
+            IM = self.make_interrupt_manager()
             IM.pend_interrupt(PendingInterrupt(4, 888, pfoo))
             iinfo = IM.get_pending(0)
             self.assertEqual(foodict['foo'], 1234)
