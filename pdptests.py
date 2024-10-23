@@ -222,7 +222,7 @@ class TestMethods(unittest.TestCase):
             a.mov((i * 8192) >> 6, '(r4)+')
 
         # kernel seg 7 to I/O page
-        a.mov(0o776000 >> 6, '(r4)')
+        a.mov(0o760000 >> 6, '(r4)')
 
         # user segs 0 .. 7 to physical 64K .. 128K
         a.mov(cn.UISA0, 'r4')
