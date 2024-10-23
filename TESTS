@@ -1,0 +1,34 @@
+#!/bin/sh
+
+FAILS=""
+TESTFILES="interrupts.py pdpasmhelper.py pdptests.py"
+
+COUNT_GOOD=0
+COUNT_BAD=0
+
+for TEST in $TESTFILES
+do
+    echo "Testing $TEST"
+    python3 $TEST
+    if [ $? -eq 0 ]
+    then
+	COUNT_GOOD=`expr $COUNT_GOOD + 1`
+    else
+	echo TEST $TEST failed
+	FAILS="$TEST $FAILS"
+	COUNT_BAD=`expr $COUNT_BAD + 1`
+    fi
+done
+
+if [ $COUNT_BAD -eq 0 ]
+then
+    COUNT_GOOD="$COUNT_GOOD (all)"
+fi
+
+echo RESULTS: $COUNT_GOOD module suites passed, $COUNT_BAD failed.
+
+if [ x"$FAILS" != x ]
+then
+    echo "**TEST FAILURES: $FAILS"
+    exit 1
+fi
