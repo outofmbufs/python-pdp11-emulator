@@ -25,17 +25,19 @@
 # There are two modes of operation: socket or stdin.
 #
 # socket: In socket mode, this starts a simple TCP server and accepts
-#         connections on port 1170 (cute). Characters a proxied back
+#         connections on port 1170 (cute). Characters are proxied back
 #         and forth from this socket to the emulated console
 #
 # stdin:  In stdin mode, python's stdin is usurped and put into raw mode.
 #         The python console is the emulated console. This mode
 #         requires termios ("unix only" but may exist on other systems)
 #
-#         In this mode there will be no way to kill/exit the emulation unless
-#         the running code halts. Alternatively, the input byte sequence:
+#         In this mode the normal ^C/SIGINT does nothing because in raw
+#         mode there are no special characters; everything is passed to
+#         the emulated environment. The only way to exit/stop the emulator is
+#         if the running code halts. Alternatively, the input byte sequence:
 #                   0xC3 0xA7
-#         which is Unicode U+00E7, c--cedilla, will cause the emulation to
+#         which is Unicode U+00E7, c-cedilla, will cause the emulation to
 #         halt as if the physical console HALT toggle had been selected.
 #         This sequence was chosen because it is option-C on a mac; see
 #                 HALT_SEQUENCE
@@ -79,6 +81,7 @@ class KL11:
     SERVERPORT = 1170
 
     HALT_SEQUENCE = bytes((0xc3, 0xa7))
+#   HALT_SEQUENCE = bytes((0x05,))      # this will do ^E to exit, like SIMH
 
     def __init__(self, ub, /, *, baseaddr=KL11_DEFAULT,
                  send_telnet=False, use_stdin=False):
@@ -234,7 +237,7 @@ class KL11:
         def _outloop(q, outf):
             while True:
                 try:
-                    c = q.get(True, timeout=2)
+                    c = q.get()
                     if c is self._SHUTDOWN_SENTINEL:
                         break
                 except queue.Empty:
@@ -293,7 +296,7 @@ class KL11:
         def _outloop(q, s):
             while True:
                 try:
-                    c = q.get(True, timeout=2)
+                    c = q.get()
                     if c is self._SHUTDOWN_SENTINEL:
                         break
                 except queue.Empty:
