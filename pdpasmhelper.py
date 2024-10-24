@@ -247,6 +247,9 @@ class PDP11InstructionAssembler:
     def negb(self, dst):
         return self._1op(0o105400, dst)
 
+    def adc(self, dst):
+        return self._1op(0o005500, dst)
+
     def tst(self, dst):
         return self._1op(0o005700, dst)
 
