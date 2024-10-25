@@ -25,17 +25,26 @@ from types import SimpleNamespace
 import breakpoints as BKP
 from machine import PDP1170
 from unibus import BusCycle
+from kw11 import KW11
 from kl11 import KL11
 from branches import BRANCH_CODES
 from pdptraps import PDPTraps
 import unittest
 import random
+import time
 import os
 import io
 import hashlib
 import boot
 
 from pdpasmhelper import InstructionBlock
+
+
+# subclass of KW11 to allow for selectable HZ rate
+class KW11HZ(KW11):
+    def __init__(self, *args, hz, **kwargs):
+        self.HZ = hz
+        super().__init__(*args, **kwargs)
 
 
 class TestMethods(unittest.TestCase):
@@ -45,9 +54,11 @@ class TestMethods(unittest.TestCase):
     # used to create various instances, collects all the options
     # detail into this one place... mostly this is about loglevel
     @classmethod
-    def make_pdp(cls, memwords=64*1024):
+    def make_pdp(cls, memwords=64*1024, loglevel=None):
+        if loglevel is None:
+            loglevel = cls.PDPLOGLEVEL
         m128 = [0] * memwords
-        return PDP1170(loglevel=cls.PDPLOGLEVEL, physmem=m128)
+        return PDP1170(loglevel=loglevel, physmem=m128)
 
     @staticmethod
     def ioaddr(p, offs):
@@ -200,7 +211,7 @@ class TestMethods(unittest.TestCase):
         self.loadphysmem(p, a, instloc)
         return p, instloc
 
-    def u64mapped_pdp(self, p=None, /):
+    def u64mapped_pdp(self, p=None, /, *pdpargs, **pdpkwargs):
         # Make a PDP11 with:
         #   * kernel space mapped to first 56K of memory (straight through)
         #   * top of kernel space mapped to I/O page
@@ -209,7 +220,7 @@ class TestMethods(unittest.TestCase):
         # No I/D separation.
         #
         if p is None:
-            p = self.make_pdp()
+            p = self.make_pdp(*pdpargs, **pdpkwargs)
 
         cn = self.usefulconstants()
 
@@ -2414,6 +2425,110 @@ class TestMethods(unittest.TestCase):
         for i, t in enumerate(cbx.arglog):
             self.assertEqual(t, gold[i])
 
+    def test_adc(self):
+        p = self.make_pdp()
+        a = InstructionBlock()
+        a.clr('r1')
+        a.mov(0o177777, 'r0')
+        # NOTE WELL: INC DOES NOT SET C (!!!)
+        a.add(1, 'r0')
+        a.adc('r1')
+        a.halt()
+        self.loadphysmem(p, a, 0o10000)
+        p.run(pc=0o10000)
+        self.assertEqual(p.r[0], 0)
+        self.assertEqual(p.r[1], 1)
+
+    # not automatically tested
+    def clocktests_basic(self):
+        # test clock overhead
+
+        # memory layout
+        # 0o100     VECTOR for KW11 interrupt handler
+        # 0o102     PSW for KW11 interrupt handler
+        #
+        # 0o10000   stack (grows down)
+        # 0o10000   start address (set up clock, vectors, etc)
+        # 0o20000   interrupt handler
+        #
+        # REGISTER USAGE
+        #   r0-r3   scratch
+        #   r3      count down (# of interrupts to take until HALT)
+        #   r4:r5   32-bit count up performance tracker (r5 high)
+
+        mc = InstructionBlock()
+        mc_addr = 0o10000
+
+        ih = InstructionBlock()
+        ih_addr = 0o20000
+
+        mc.mov(mc_addr, 'sp')
+        mc.mov(0o340, mc.ptr(0o177776))        # PSW .. pri 7
+        mc.mov(ih_addr, mc.ptr(0o100))
+        mc.mov(0o340, mc.ptr(0o102))
+        mc.mov(10, 'r3')
+        mc.clr('r4')
+        mc.clr('r5')
+
+        # enable interrupts and start the counter loop
+        mc.mov(0o100, mc.ptr(0o177546))
+        mc.clr(mc.ptr(0o177776))
+        mc.label('loop')
+        mc.inc('r4')           # NOTE: INC does not set C (!!)
+        mc.bne('loop')
+        mc.inc('r5')
+        mc.br('loop')
+
+        ih.dec('r3')
+        ih.beq('done')
+        ih.rti()
+        ih.label('done')
+        ih.halt()
+
+        # this test is a little questionable in that what it assumes
+        # is that an increasing line clock frequency will correspond to
+        # an increase in overhead, and the
+        #
+        #            self.assertTrue(thisrun < prev)
+        #
+        # test depends on that (i.e., fewer increments get to happen if the
+        # clock interrupt is going off more often). Obviously, random
+        # performance interference issues in the test environment could
+        # cause a spurious failure.
+        #
+        prev = 0x7fffffff
+        for hz in [2, 5, 10, 25, 50, 100]:
+            p = self.make_pdp()
+            clk = KW11HZ(p.ub, hz=hz)
+            self.loadphysmem(p, mc, mc_addr)
+            self.loadphysmem(p, ih, ih_addr)
+            p.run(pc=mc_addr)
+            thisrun = (p.r[5] << 16) | p.r[4]
+            with self.subTest(hz=hz, prev=prev, thisrun=thisrun):
+                self.assertTrue(thisrun < prev)
+            prev = thisrun
+
+    # not automatically tested
+    def clocktests_hz(self):
+        for hz in [5, 10, 25, 50, 100]:
+            p = self.make_pdp()
+            clk = KW11HZ(p.ub, hz=hz)
+
+            arbitrary_delay = 1
+            time.sleep(arbitrary_delay)
+            stamps = list(clk.tslog)
+
+            # However many time stamps there are, the average delay over
+            # those readings should be 1/hz seconds.  It won't be that,
+            # of course, but see if it is plausible.
+            calculated_hz = (len(stamps) - 1) / (stamps[-1] - stamps[0])
+
+            # it will (presumably!) always run slow, and this is the
+            # empirically-determined reasonable slop factor
+            minratio = 0.8
+            with self.subTest(hz=hz, calculated_hz=calculated_hz):
+                self.assertTrue(calculated_hz/hz > minratio)
+
     def test_breakpoints1(self):
         # test the steps=N breakpoint capability
 
@@ -2710,7 +2825,8 @@ class TestMethods(unittest.TestCase):
         #     are all just dummied up right now
 
     # this is not a unit test, invoke it using timeit etc
-    def speed_test_setup(self, instwords, /, *, loopcount=200, mmu=True):
+    def speed_test_setup(self, instwords, /, *,
+                         loopcount=200, usemmu=True, hz=0):
         """Set up a test run of the instwords (1 word or 2)
         Returns tuple: p, pc, per .. see speed_test_run()
 
@@ -2718,28 +2834,52 @@ class TestMethods(unittest.TestCase):
         If len == 2 (i.e., an instruction + operand), 24 instructions + SOB
         """
 
-        p, pc = self.u64mapped_pdp()
+        # use loglevel WARNING to avoid a zillion start/halt logs
+        p, pc = self.u64mapped_pdp(loglevel='WARNING')
 
         # the returned pdp is loaded with instructions for setting up
         # the mmu; only do them if that's what is wanted
-        #
-        # NOTE: the test code is run in USER mode Because Reasons
-        # (was experimenting with virtual caches and this was helpful).
+        # NOTE: the test code is run in USER mode.
 
-        if mmu:
+        if usemmu:
+            if hz:
+                clk = KW11HZ(p.ub, hz=hz)
+                p.associate_device(clk, 'KW')
+
             p.run(pc=pc)             # set up all those mappings
             usermode_base = 0o10000  # phys 0o210000 maps here in USER mode
             user_physloc = 0o210000
+
+            if hz:
+                ihloc = 0o4000
+                # the interrupt handler itself
+                ih = InstructionBlock()
+                ih.rti()
+                for a2, w in enumerate(ih):
+                    p.mmu.wordRW(ihloc + (2 * a2), w)
+
+                # set up the vector
+                p.mmu.wordRW(0o100, ihloc)
+                p.mmu.wordRW(0o102, 0o340)
+
+                # start the clock!
+                p.mmu.wordRW(0o177546, 0o100)
         else:
+            if hz:
+                raise ValueError("Use of KW11 requires MMU")
             user_physloc = 0o20000
             usermode_base = user_physloc
+
+        # kernel startup code at 0o5000 (NOTE: ih was at 0o4000)
+        kloc = 0o5000
 
         # this is the tiny kernel code used to set up and start
         # each major iteration of the user mode timing code. The one-time
         # overhead of these few instructions is irrelevant in the timing test.
+
         k = InstructionBlock()
         k.mov(0o20000, 'sp')           # establish proper kernel stack
-        k.mov(0o140340, '-(sp)')       # USER mode, no interrupts
+        k.mov(0o140000, '-(sp)')       # USER mode, spl 0
         k.mov(usermode_base, '-(sp)')  # pc start for loop/USER code
         # these environmental "knowns" are available for the test inst
         k.mov(0o1000, 'r5')            # usable writeable addr
@@ -2747,7 +2887,6 @@ class TestMethods(unittest.TestCase):
         k.clr('r1')
         k.rtt()                        # off to the races!
 
-        kloc = 0o4000
         for a2, w in enumerate(k):
             p.mmu.wordRW(kloc + (2 * a2), w)
 
@@ -2826,9 +2965,11 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--performance', action="store_true")
+    parser.add_argument('--clocktest', action="store_true")
     parser.add_argument('-i', '--instruction', default=movr1r0, type=asminst,
                         help="Test instruction, in octal. E.g.: 010203")
     parser.add_argument('--nommu', action="store_true")
+    parser.add_argument('--hz', type=int, default=0)
     parser.add_argument('tests', nargs="*")
     args = parser.parse_args()
 
@@ -2851,7 +2992,8 @@ if __name__ == "__main__":
         instwords = args.instruction
         loopcount = 20
         p, pc, per = t.speed_test_setup(
-            instwords, loopcount=loopcount, mmu=mmu)
+            instwords, loopcount=loopcount, usemmu=mmu, hz=args.hz)
+
         number = 1000000 // (loopcount * per)
         ta = timeit.repeat(stmt='t.speed_test_run(p, pc)',
                            number=number, globals=globals(), repeat=50)
@@ -2859,4 +3001,12 @@ if __name__ == "__main__":
         ws = list(map(lambda w: f"{oct(w)[2:]:0>6s}", args.instruction))
         print(f"Instruction {ws} took {tnsec} nsecs")
     else:
-        unittest.main()
+        argv = None
+        if args.clocktest:
+            argv = [parser.prog]
+            tests = [s for s in dir(TestMethods)
+                     if s.startswith('clocktests_')]
+            argv = [parser.prog] + ['TestMethods.' + s for s in tests]
+            if tests:
+                print(f"Tests to run: {tests}")
+        unittest.main(argv=argv)
