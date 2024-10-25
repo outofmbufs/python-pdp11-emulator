@@ -22,25 +22,29 @@
 
 # line frequency clock
 
-import time
+import collections
 import threading
-
-
-# The real clock runs at 50 or 60 cycles per second. However, the
-# overhead of emulated interrupts is high - as a compromise set HZ
-# to something slower than 50-60...
-HZ = 25
+import time
 
 
 class KW11:
 
     KW11_OFFS = 0o17546
+    HZ = 50
+    TLSECS = 5          # length (in seconds) of time stamp log
 
     def __init__(self, ub):
         self._t = threading.Thread(
-            target=self._cloop, args=(1/HZ, ub.intmgr), daemon=True)
+            target=self._cloop, args=(1/self.HZ, ub.intmgr), daemon=True)
         self.interrupts_enabled = False
         self.monbit = 1       # the manual says this starts as 1
+
+        # the tsq (time stamp queue) is a TLSECS (ish) list of timestamps
+        # that can be used for debugging/analysis
+        if self.TLSECS > 0:
+            self.tslog = collections.deque([], self.TLSECS * self.HZ)
+        else:
+            self.tslog = None
         ub.register_simpleattr(self, 'LKS', self.KW11_OFFS, reset=True)
         self._t.start()
 
@@ -48,6 +52,8 @@ class KW11:
     def _cloop(self, interval, imgr):
         while True:
             time.sleep(interval)
+            if self.tslog is not None:
+                self.tslog.append(time.time())
             self.monbit = 1
             # The loop runs forever (as does the real device) but only
             # generates interrupts if interrupts are enabled
