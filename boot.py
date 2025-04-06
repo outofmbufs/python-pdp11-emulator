@@ -48,15 +48,17 @@ def boot_hp(p, /, *, addr=0o10000, deposit_only=False, switches=0):
     # NOTE WELL: THIS ASSUMES THE MACHINE IS IN RESET CONDITION WHICH
     #            MEANS MANY OF THE DEVICE REGISTERS ARE ASSUMED TO BE ZERO
     #
-    #      MOV #176704,R0       -- note how used
-    #      MOV #177000,-(R0)    -- word count - read 1K though boot really 512
-    #      MOV #071,-(R0)       -- go!
+    # The BSD boot program expects to find the CSR (176700) in R1. Note
+    # how cute this little program is in obeying that :)
+    #      MOV #176704,R1       -- note how used
+    #      MOV #177000,-(R1)    -- word count - read 1K though boot really 512
+    #      MOV #071,-(R1)       -- go!
     program_insts = (
-        0o012700,          # MOV #0176704,R0
+        0o012701,          # MOV #0176704,R1
         0o176704,
-        0o012740,          # MOV #177000,-(R0)
+        0o012741,          # MOV #177000,-(R1)
         0o177000,
-        0o012740,          # MOV #071, -(R0)
+        0o012741,          # MOV #071, -(R1)
         0o000071,
         0o0,               # HALT
     )
