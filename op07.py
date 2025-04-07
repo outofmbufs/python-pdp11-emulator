@@ -138,43 +138,58 @@ def op073_ashc(cpu, inst):
     cpu.r[dstreg | 1] = r & cpu.MASK16
 
 
-# this is the heart of ash and ashc
+# this is the heart of ash and ashc.
 def _shifter(cpu, value, shift, *, opsize):
     """Returns shifted value and sets condition codes."""
 
-    signmask = cpu.SIGN16
-    signextend = 0xFFFFFFFF0000
-    if opsize == 4:
-        signmask <<= 16
-        signextend <<= 16
+    # Implementation relies on unlimited size python ints (at least 64-bits)
 
-    vsign = value & signmask
+    if shift < 0 or shift > 63 or (opsize not in (2, 4)):
+        raise ValueError(f"Internal ASH/ASHC error, {shift=} {opsize=}")
+
+    signmask = cpu.SIGN16
+    if opsize == 4:
+        signmask = cpu.SIGN16 << 16
+
+    original_signbit = bool(value & signmask)
 
     if shift == 0:
-        cpu.psw_n = vsign
-        cpu.psw_z = (value == 0)
-        cpu.psw_v = 0
-        cpu.psw_c = 0         # per 1981 PDP11 Processor Handbook
-        return value
-    elif shift > 31:       # right shift
-        # sign extend if appropriate, so the sign propagates
-        if vsign:
-            value |= signextend
+        overflow = 0
+        cbit = 0                   # per 1981 PDP11 Processor Handbook
+    elif shift > 31:
+        # RIGHT SHIFT
+
+        if original_signbit:
+            # add 1 bits up top to preserve negativity for up to 32 bit shift
+            value |= 0xFFFFFFFF0000 if opsize == 2 else 0xFFFFFFFF00000000
 
         # right shift by 1 less, to capture bottom bit for C
         value >>= (63 - shift)  # yes 63, see ^^^^^^^^^^^^^^^
         cbit = (value & 1)
         value >>= 1
+        overflow = False
     else:
-        # shift by 1 less, again to capture cbit
+        # LEFT SHIFT
+
+        # these are the upper bits (beyond the 16 or 32 bit result)
+        # that must stay the same as the original sign bit or there was
+        # an overflow. Note the signbit is included in this mask
+        upperbits = (((1 << shift) - 1) << (opsize*8)) | signmask
+
+        # shift by 1 less to capture cbit
         value <<= (shift - 1)
         cbit = value & signmask
         value <<= 1
 
+        if original_signbit:
+            overflow = ((value & upperbits) != upperbits)
+        else:
+            overflow = (value & upperbits)
+
     value &= (signmask | (signmask - 1))
     cpu.psw_n = (value & signmask)
     cpu.psw_z = (value == 0)
-    cpu.psw_v = (cpu.psw_n != vsign)
+    cpu.psw_v = overflow
     cpu.psw_c = cbit
 
     return value
