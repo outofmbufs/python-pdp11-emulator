@@ -682,6 +682,101 @@ class TestMethods(unittest.TestCase):
         self.check16(p)
         self.assertEqual(p.r[2], 0o1224)
 
+    def exhaustive_ash(self):
+        p = self.make_pdp()
+        a = InstructionBlock()
+
+        a.ash('r4', 'r0')             # assumes r4 is shf, r0 is value
+        a.halt()
+        instloc = 0o10000
+        self.loadphysmem(p, a, instloc)
+
+        # left shifts
+        for shf in range(1, 32):
+            # these are the sign bit and all the "higher than 16 bits) bits
+            # expected as a result of shifting left shf places
+            vbits = (((1 << shf) - 1) << 16) | 0x8000
+            p.r[4] = shf
+            for value in range(32768):
+
+                # positive value test
+                p.r[0] = value
+                p.run(pc=instloc)
+                result = value << shf
+                overflow = (result & vbits)
+                result &= 0xFFFF
+                with self.subTest(value=value, shf=shf):
+                    self.assertEqual(p.r[0], result)
+                    self.assertEqual(bool(p.psw_v), bool(overflow))
+
+                # negative value test, nearly identical except for overflow
+                value += 32768
+                p.r[0] = value
+                p.run(pc=instloc)
+                result = value << shf
+                overflow = ((result & vbits) != vbits)
+                result &= 0xFFFF
+                with self.subTest(value=value, shf=shf):
+                    self.assertEqual(p.r[0], result)
+                    self.assertEqual(bool(p.psw_v), bool(overflow))
+
+        # right shifts, similar but different
+        for shf in range(32, 64):
+            p.r[4] = shf
+            for value in range(32768):
+                # positive value test
+                p.r[0] = value
+                p.run(pc=instloc)
+                result = value >> (64 - shf)
+                result &= 0xFFFF
+                with self.subTest(value=value, shf=shf):
+                    self.assertEqual(p.r[0], result)
+                    self.assertEqual(bool(p.psw_v), False)
+
+                # negative value test
+                value += 32768
+                p.r[0] = value
+                p.run(pc=instloc)
+
+                # These are the extra sign extension bits
+                vbits = (((1 << shf) - 1) << 16) | 0x8000
+
+                result = (vbits | value) >> (64 - shf)
+                result &= 0xFFFF
+                with self.subTest(value=value, shf=shf):
+                    self.assertEqual(p.r[0], result)
+                    self.assertEqual(bool(p.psw_v), False)
+
+    def test_ash_psw_v(self):
+
+        testvectors = (
+            # (value, shift count, result, psw_v
+            (0o100000, 1, 0, True),
+            (0o040001, 2, 4, True),         # Issue #22
+            (0o050001, 2, 16384+4, True),   # also Issue #22
+            (0o177777, 1, 65534, False),
+            (0o177777, 15, 32768, False),
+            (0o177777, 16, 0, True),
+            (0o120000, 2, 32768, True),
+            (0o140000, 1, 32768, False),
+            (0o100001, 2, 4, True),
+            (0o40001, 2, 4, True),
+        )
+
+        for value, shf, result, psw_v in testvectors:
+            a = InstructionBlock()
+            a.mov(value, 'r0')
+            a.ash(shf, 'r0')
+            a.halt()
+
+            p = self.make_pdp()
+            instloc = 0o10000
+            self.loadphysmem(p, a, instloc)
+            p.run(pc=instloc)
+            with self.subTest(value=value, shf=shf):
+                self.assertEqual(p.r[0], result)
+                self.assertEqual(bool(p.psw_v), bool(psw_v))
+
     def test_shiftb(self):
         # test correct operation of byte operations on registers
         # r2 counts test progress
