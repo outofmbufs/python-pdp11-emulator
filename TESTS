@@ -1,5 +1,13 @@
 #!/bin/sh
 
+if [ x"$1" == xLONG ]
+then
+    EXTRATESTS="Y"
+    shift
+else
+    EXTRATESTS="N"
+fi
+
 FAILS=""
 TESTFILES="interrupts.py pdpasmhelper.py pdptests.py"
 
@@ -31,4 +39,16 @@ if [ x"$FAILS" != x ]
 then
     echo "**TEST FAILURES: $FAILS"
     exit 1
+fi
+
+if [ $EXTRATESTS == Y ]
+then
+    echo "Starting long duration tests"
+    # XXX these are just "known by hand" for now
+    python3 pdptests.py TestMethods.exhaustive_ash
+    if [ $? -ne 0 ]
+    then
+	echo FAILED
+	exit 1
+    fi
 fi
