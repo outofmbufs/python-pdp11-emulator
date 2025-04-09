@@ -52,7 +52,7 @@ def op_rtt(cpu, inst):
 
     # this knows  KERNEL < SUPERVISOR < USER
     newpsw_d['curmode'] = max(cpu.psw_curmode, newpsw_d['curmode'])
-    newpsw_d['prevmode'] = max(cpu.psw_prevmode, newpsw_d['prevmode'])
+    newpsw_d['prevmode'] = max(cpu.psw_curmode, newpsw_d['prevmode'])
 
     # if not in kernel mode, cannot change pri
     if cpu.psw_curmode != cpu.KERNEL:
