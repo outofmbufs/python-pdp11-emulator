@@ -682,6 +682,8 @@ class TestMethods(unittest.TestCase):
         self.check16(p)
         self.assertEqual(p.r[2], 0o1224)
 
+    # this is not invoked automatically but performs all possible
+    # 16 bit ASH values crossed with all possible 6-bit shift counts.
     def exhaustive_ash(self):
         p = self.make_pdp()
         a = InstructionBlock()
@@ -776,6 +778,26 @@ class TestMethods(unittest.TestCase):
             with self.subTest(value=value, shf=shf):
                 self.assertEqual(p.r[0], result)
                 self.assertEqual(bool(p.psw_v), bool(psw_v))
+
+    def test_ashc_ror(self):
+        # test that ashc with odd register and right shift == rotate
+        # (as per pdp11 processor handbook)
+        a = InstructionBlock()
+        a.literal(0o73104)        # a.ashc('r4', 'r1')
+        a.halt()
+
+        p = self.make_pdp()
+        instloc = 0o10000
+        self.loadphysmem(p, a, instloc)
+        p.r[4] = 0o77
+
+        p.r[1] = 5
+        p.run(pc=instloc)
+        self.assertEqual(p.r[1], 0o100002)
+        p.run(pc=instloc)
+        self.assertEqual(p.r[1], 0o040001)
+        p.run(pc=instloc)
+        self.assertEqual(p.r[1], 0o120000)
 
     def test_shiftb(self):
         # test correct operation of byte operations on registers
@@ -2407,6 +2429,75 @@ class TestMethods(unittest.TestCase):
 
         with self.assertRaises(PDPTraps.AddressError):
             p.physRW_N(addr+1, len(words), words)
+
+    def test_rtt(self):
+        # ensure that RTT properly filters out various bits in various modes
+
+        p = self.make_pdp()
+        kcode = 0o4000
+        ucode = 0o5000
+        thandlers = 0o6000
+        rttcode = 0o7000
+        traprec = 0o10000
+
+        # there is ambiguity in the manuals as to whether the usermode
+        # HALT is supposed to go through vector 0o4 or 0o10; SIMH seems
+        # to prefer 4; more of the books seem to say 0o10. Dunno. This
+        # test allows either to be ok. Note the PSW condition codes used
+        # as a way to know which was which
+
+        p.physmem[2] = thandlers
+        p.physmem[3] = 0o356
+        p.physmem[4] = thandlers
+        p.physmem[5] = 0o357
+
+        a = InstructionBlock()
+        # the first goal is to get into user mode executing ucode
+        # need a valid kernel stack
+        a.mov(kcode, 'sp')         # stack just below code
+        a.mov(traprec, 'r2')       # where PSW's from all traps recorded
+        a.clr('r1')                # used to track progress
+        a.mov(0o170000, '-(sp)')   # cm/pm user/user
+        a.mov(ucode, '-(sp)')      # the userspace code
+        a.rtt()
+        self.loadphysmem(p, a, kcode)
+
+        a = InstructionBlock()
+        # this is the user code; the goal here is to try to execute
+        # an illegal rtt and see what happens
+        a.mov(ucode, 'sp')       # need a stack
+        a.inc('r1')               # show that made it to here
+        a.mov(0o0340, '-(sp)')
+        a.mov(rttcode, '-(sp)')
+        a.rtt()
+        self.loadphysmem(p, a, ucode)
+
+        # the trap handlers
+        # will get here via user mode trapping HALT
+        a = InstructionBlock()
+        a.mov('*$177776', '-(r2)')
+        a.add(0o100, 'r1')
+        a.halt()
+        self.loadphysmem(p, a, thandlers)
+
+        # the rtt code the user goes to, trying to be in kernel mode
+        # but it gets here still in user mode (because RTT filters that out)
+        # and therefore the halt instruction will actually cause a trap
+        a = InstructionBlock()
+        a.add(0o1000, 'r1')
+        a.halt()
+        self.loadphysmem(p, a, rttcode)
+
+        p.run(pc=kcode)
+        self.assertEqual(p.r[1], 0o1101)    # all these code points reached
+        self.assertEqual(p.psw_curmode, p.KERNEL)
+        self.assertEqual(p.psw_prevmode, p.USER)
+
+        # there should have been only one trap CC recorded
+        self.assertEqual(p.r[2], traprec - 2)
+
+        # and the CC should be 357 (but it is 356 in simh... investigate)
+        self.assertEqual(p.physmem[p.r[2] >> 1] & 0o377, 0o357)
 
     def test_registerio(self):
         # on most processors the general purpose registers are not really
