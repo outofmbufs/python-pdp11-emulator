@@ -956,35 +956,43 @@ class PDP1170(PDP11):
         # could test if necessary but it's just easier to do this every time
         self._syncregs()           # in case any mode/regset changes
 
-        # prevent UNDEFINED_MODE from entering the PSW (current mode)
-        m = (value >> 14) & 3
-        if m == self.UNDEFINED_MODE:
+        d = self._psw2dict(value)
+
+        if self.UNDEFINED_MODE in (d['curmode'], d['prevmode']):
             raise PDPTraps.ReservedInstruction
-        self.psw_curmode = m
 
-        # prevent UNDEFINED_MODE from entering the PSW (previous mode)
-        m = (value >> 12) & 3
-        if m == self.UNDEFINED_MODE:
-            raise PDPTraps.ReservedInstruction
-        self.psw_prevmode = m
-
-        prevregset = self.psw_regset
-        self.psw_regset = (value >> 11) & 1
-
-        newpri = (value >> 5) & 7
-        self.psw_pri = newpri
-
-        self.psw_trap = (value >> 4) & 1
-        self.psw_n = (value >> 3) & 1
-        self.psw_z = (value >> 2) & 1
-        self.psw_v = (value >> 1) & 1
-        self.psw_c = value & 1
+        for attr, val in d.items():
+            setattr(self, 'psw_' + attr, val)
 
         # set up the correct register file and install correct SP
         self.r = self.registerfiles[self.psw_regset]
         self.r[6] = self.stackpointers[self.psw_curmode]
 
         # the PC was already sync'd in syncregs()
+
+    _pswfields = {
+        'curmode': (14, 3),      # bits 14:15
+        'prevmode': (12, 3),     # bits 12:13
+        'regset': (11, 1),       # bit 11
+                                 # 8 9 10 unused
+        'pri': (5, 7),           # bits: 5:7
+        'trap': (4, 1),
+        'n': (3, 1),
+        'z': (2, 1),
+        'v': (1, 1),
+        'c': (0, 1),
+    }
+
+    def _psw2dict(self, pswval):
+        return {attr: (pswval >> bi[0]) & bi[1]
+                for attr, bi in self._pswfields.items()}
+
+    def _dict2psw(self, d):
+        psw = 0
+        for attr, val in d.items():
+            shf, mask = self._pswfields[attr]
+            psw |= (val & mask) << shf
+        return psw
 
     @property
     def logging_hack(self):

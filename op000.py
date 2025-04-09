@@ -48,7 +48,19 @@ def op_wait(cpu, inst):
 
 def op_rtt(cpu, inst):
     cpu.r[cpu.PC] = cpu.stackpop()
-    cpu.psw = cpu.stackpop()
+    newpsw_d = cpu._psw2dict(cpu.stackpop())
+
+    # this knows  KERNEL < SUPERVISOR < USER
+    newpsw_d['curmode'] = max(cpu.psw_curmode, newpsw_d['curmode'])
+    newpsw_d['prevmode'] = max(cpu.psw_prevmode, newpsw_d['prevmode'])
+
+    # if not in kernel mode, cannot change pri
+    if cpu.psw_curmode != cpu.KERNEL:
+        newpsw_d['pri'] = cpu.psw_pri
+
+    # Regset cannot be changed to zero if it is currently 1
+    newpsw_d['pri'] |= (cpu.psw_regset | newpsw_d['pri'])
+    cpu.psw = cpu._dict2psw(newpsw_d)
 
 
 def op_02xx(cpu, inst):
@@ -115,7 +127,7 @@ def op000_dispatcher(cpu, inst):
             if inst == 0:
                 op_halt(cpu, inst)
             elif inst == 6 or inst == 2:    # RTI and RTT are identical!!
-                op_rtt(cpu, inst)
+                op_rtt(cpu, inst)           # (because trace not implemented)
             elif inst == 1:
                 op_wait(cpu, inst)
             elif inst == 3:
