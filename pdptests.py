@@ -356,6 +356,69 @@ class TestMethods(unittest.TestCase):
                 self.check16(p)
                 self.assertEqual(p.r[0], r0result)
 
+    def test_psw(self):
+        p = self.make_pdp()
+
+        # the test is assembled from:
+        #         .org 4000
+        #         halt = 0
+        #         mov $20000,sp   / establish a stack on general principles
+        #         clr r0               / clears all PSW bits except Z
+        #         inc r0               / clears Z
+        #         sen
+        #         bmi 1f
+        #         mov $66610,r2
+        #         halt
+        # 1:      cln
+        #         bpl 1f
+        #         mov $66650,r2
+        #         halt
+        # 1:      clr r0
+        #         inc r0
+        #         sez
+        #         beq 1f
+        #         mov $66604,r2
+        #         halt
+        # 1:      clz
+        #         bne 1f
+        #         mov $66644,r2
+        #         halt
+        # 1:      clr r0
+        #         inc r0
+        #         sev
+        #         bvs 1f
+        #         mov $66602,r2
+        #         halt
+        # 1:      clv
+        #         bvc 1f
+        #         mov $66642,r2
+        #         halt
+        # 1:      clr r0
+        #         inc r0
+        #         sec
+        #         bcs 1f
+        #         mov $66601,r2
+        #         halt
+        # 1:      clc
+        #         bcc 1f
+        #         mov $66641,r2
+        #         halt
+        # 1:      mov $77, r2
+        #         halt
+
+        insts = [0o12706, 0o20000, 0o5000, 0o5200, 0o270, 0o100403, 0o12702,
+                 0o66610, 0o0, 0o250, 0o100003, 0o12702, 0o66650, 0o0,
+                 0o5000, 0o5200, 0o264, 0o1403, 0o12702, 0o66604, 0o0,
+                 0o244, 0o1003, 0o12702, 0o66644, 0o0, 0o5000, 0o5200, 0o262,
+                 0o102403, 0o12702, 0o66602, 0o0, 0o242, 0o102003, 0o12702,
+                 0o66642, 0o0, 0o5000, 0o5200, 0o261, 0o103403, 0o12702,
+                 0o66601, 0o0, 0o241, 0o103003, 0o12702, 0o66641, 0o0,
+                 0o12702, 0o77, 0o0]
+
+        self.loadphysmem(p, insts, 0o4000)
+        p.run(pc=0o4000)
+        self.assertEqual(p.r[2], 0o77)
+
     def test_add_sub(self):
         p = self.make_pdp()
 
