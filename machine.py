@@ -921,28 +921,14 @@ class PDP1170(PDP11):
 
     @property
     def psw(self):
-        # NOTE: to simplify/accelerate condition code handling during
-        # instructions, the NZVC bits are broken out into individual
-        # attributes, and are stored as truthy/falsey not necessarily
-        # 1/0 or True/False.
-
-        # so, to reconstitute NZVC bits ...
-        NZVC = 0
-        if self.psw_n:
-            NZVC |= 0o10
-        if self.psw_z:
-            NZVC |= 0o04
-        if self.psw_v:
-            NZVC |= 0o02
-        if self.psw_c:
-            NZVC |= 0o01
-
-        return (((self.psw_curmode & 3) << 14) |
-                ((self.psw_prevmode & 3) << 12) |
-                ((self.psw_regset & 1) << 11) |
-                ((self.psw_pri & 7) << 5) |
-                ((self.psw_trap & 1) << 4) |
-                NZVC)
+        pswd = {attr: getattr(self, 'psw_' + attr)
+                for attr in self._pswfields}
+        # the various 1-bit attributes are stored as "truthy/falsy"
+        # in the psw_foo attributes but need to be normalized to 1/0 here
+        for a, v in pswd.items():
+            if self._pswfields[a][1] == 1:
+                pswd[a] = bool(v)
+        return self._dict2psw(pswd)
 
     # Write the ENTIRE processor word, without any privilege enforcement.
     # The lack of privilege enforcement is necessary because, e.g., that's
