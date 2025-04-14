@@ -122,6 +122,7 @@ class TestMethods(unittest.TestCase):
     # Create and return a test machine with a simple memory mapping:
     #    Kernel Instruction space seg 0 points to physical 0
     #    Kernel Data space segment 0 also points to physical 0
+    #    Kernel Data space segment 7 points to the I/O page
     #    User instruction space seg 0 points to physical 0o20000
     #    User Data space seg 0 points to physical 0o40000
     # and turns on the MMU
@@ -209,7 +210,8 @@ class TestMethods(unittest.TestCase):
 
         instloc = 0o4000             # 2K
         self.loadphysmem(p, a, instloc)
-        return p, instloc
+
+        return SimpleNamespace(p=p, startaddr=instloc, instructions=a)
 
     def u64mapped_pdp(self, p=None, /, *pdpargs, **pdpkwargs):
         # Make a PDP11 with:
@@ -300,10 +302,10 @@ class TestMethods(unittest.TestCase):
 
         for result, insts in tvecs:
             with self.subTest(result=result, insts=insts):
-                p, pc = self.simplemapped_pdp(postmmu=insts)
-                p.run(pc=pc)
-                self.check16(p)
-                self.assertEqual(p.r[0], result)
+                mp = self.simplemapped_pdp(postmmu=insts)
+                mp.p.run(pc=mp.startaddr)
+                self.check16(mp.p)
+                self.assertEqual(mp.p.r[0], result)
 
     def test_mfpxsp(self):
         cn = self.usefulconstants()
@@ -326,17 +328,17 @@ class TestMethods(unittest.TestCase):
         postmmu = InstructionBlock()
         postmmu.rtt()                      # RTT - goes to user mode, addr 0
 
-        p, pc = self.simplemapped_pdp(premmu=premmu, postmmu=postmmu)
+        mp = self.simplemapped_pdp(premmu=premmu, postmmu=postmmu)
 
         # put the trap handler at 14000 as expected
         th = InstructionBlock()
         th.mfpd('sp')
         th.mov('(sp)+', 'r3')
         th.halt()
-        self.loadphysmem(p, th, 0o14000)
-        p.run(pc=pc)
-        self.check16(p)
-        self.assertEqual(p.r[2], p.r[3])
+        self.loadphysmem(mp.p, th, 0o14000)
+        mp.p.run(pc=mp.startaddr)
+        self.check16(mp.p)
+        self.assertEqual(mp.p.r[2], mp.p.r[3])
 
     def test_mtpi(self):
         cn = self.usefulconstants()
@@ -351,10 +353,10 @@ class TestMethods(unittest.TestCase):
 
         for r0result, insts in tvecs:
             with self.subTest(r0result=r0result, insts=insts):
-                p, pc = self.simplemapped_pdp(postmmu=insts)
-                p.run(pc=pc)
-                self.check16(p)
-                self.assertEqual(p.r[0], r0result)
+                mp = self.simplemapped_pdp(postmmu=insts)
+                mp.p.run(pc=mp.startaddr)
+                self.check16(mp.p)
+                self.assertEqual(mp.p.r[0], r0result)
 
     def test_psw(self):
         p = self.make_pdp()
