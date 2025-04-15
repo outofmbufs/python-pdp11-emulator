@@ -105,6 +105,8 @@ class TestMethods(unittest.TestCase):
         ns.UDSA0 = ns.UISA0 + 0o20
 
         ns.MMR0 = cls.ioaddr(p, p.mmu.MMR0_OFFS)
+        ns.MMR1 = cls.ioaddr(p, p.mmu.MMR1_OFFS)
+        ns.MMR2 = cls.ioaddr(p, p.mmu.MMR2_OFFS)
         ns.MMR3 = cls.ioaddr(p, p.mmu.MMR3_OFFS)
 
         return ns
@@ -210,8 +212,7 @@ class TestMethods(unittest.TestCase):
 
         instloc = 0o4000             # 2K
         self.loadphysmem(p, a, instloc)
-
-        return SimpleNamespace(p=p, startaddr=instloc, instructions=a)
+        return SimpleNamespace(p=p, startaddr=instloc, instructions=a, cn=cn)
 
     def u64mapped_pdp(self, p=None, /, *pdpargs, **pdpkwargs):
         # Make a PDP11 with:
@@ -2293,6 +2294,57 @@ class TestMethods(unittest.TestCase):
         p.run(pc=base_address)
         self.check16(p)
         self.assertEqual(p.r[0], 0)
+
+    def test_mmr1pc(self):
+        cn = self.usefulconstants()
+        instloc = 0o4000
+        testloc = 0o6000
+        trap_handler = 0o10000
+
+        # map kernel page 0 to physical 0
+        # put kernel stack at the top of that page (i.e., at 8k)
+        # map kernel page 7 to the I/O page
+        # do not enable separate I/D
+
+        a = InstructionBlock()
+        a.mov(0o20000, 'sp')
+        a.clr(a.ptr(cn.KISA0))
+        a.mov(0o0760000 >> 6, a.ptr(cn.KISA0 + (7 * 2)))
+
+        # set the PDRs for segment zero and seven
+        a.mov(0o077406, 'r0')
+        a.mov('r0', a.ptr(cn.KISD0))
+        a.mov('r0', a.ptr(cn.KISD0 + (7 * 2)))
+
+        # turn on relocation mode ...
+        a.inc(a.ptr(cn.MMR0))
+
+        a.mov(trap_handler, '*$250')
+        a.mov(0o340, '*$252')
+        a.jmp(a.ptr(testloc))
+
+        p = self.make_pdp()
+        self.loadphysmem(p, a, instloc)
+
+        # the MMU fault handler
+        mf = InstructionBlock()
+        mf.mov(cn.MMR1, 'r3')      # r3 also serves as "got here" sentinel
+        mf.mov('(r3)', 'r4')
+        mf.halt()
+        self.loadphysmem(p, mf, trap_handler)
+
+        # the test code itself
+        tc = InstructionBlock()
+        tc.mov(0o20004, 'r2')         # test will access (r2) with invalid r2
+        tc.mov(a.ptr(cn.MMR1), 'r0')  # a no-fault-happened MMR1 (i.e., zero)
+        tc.mov(0o12345, '(r2)+')      # this should fault
+        tc.halt()
+        self.loadphysmem(p, tc, testloc)
+
+        p.run(pc=instloc)
+        self.assertEqual(p.r[4], 0o11027)     # MMR1 result verified via simh
+        self.assertEqual(p.r[0], 0)           # a "no fault" MMR1
+        self.assertEqual(p.r[3], cn.MMR1)     # verifies trap handler invoked
 
     def test_stacklim0(self):
         # verify that simply *having* an illegal SP doesn't trap
