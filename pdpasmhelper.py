@@ -30,6 +30,7 @@
 
 from branches import BRANCH_CODES
 from collections import defaultdict
+from contextlib import contextmanager
 from functools import partial
 
 
@@ -386,10 +387,25 @@ class BranchTarget(FwdRef):
 #
 # An InstructionBlock can be used this way:
 #
-# a = InstructionBlock()
-# a.mov('r1', 'r2')
-# a.clr('r0')
-# etc ...
+#   a = InstructionBlock()
+#   a.mov('r1', 'r2')
+#   a.clr('r0')
+#   etc ...
+#
+#
+# As a convenience, especially with respect to using the MemoryBlocks class
+# to organize multiple InstructionBlock objects, each InstructionBlock can
+# be given an optional name, and an optional addr:
+#
+#  a = InstructionBlock('foo', addr=0o1000)
+#
+# The name argument is positional (and optional). It has no semantic effect
+# but comes into play if a MemoryBlocks object is being used. If no name
+# is given, a unique name is generated.
+#
+# The addr is keyword-only and optional. It will be used as the
+# default addr value by methods (such as .simh()) that have an
+# optional addr argument.
 #
 # Each call to an instruction method appends that instruction to the block.
 # Subject to opinion, this may be notationally cleaner/clearer and also
@@ -417,11 +433,13 @@ class BranchTarget(FwdRef):
 
 
 class InstructionBlock(PDP11InstructionAssembler):
-    def __init__(self):
+    def __init__(self, name=None, /, *, addr=None):
         super().__init__()
         self._instblock = []
         self._labels = {}
         self._fwdrefs = defaultdict(list)
+        self.name = name or f"InsBlk-{id(self)}"
+        self.addr = addr
 
     def _seqwords(self, seq):
         self._instblock += seq
@@ -646,22 +664,94 @@ class InstructionBlock(PDP11InstructionAssembler):
         # are unresolved forward references. This is a way around that.
         return list(self._instblock)
 
-    def simh(self, *, startaddr=0o10000):
+    def simh(self, *, addr=None):
         """Generate lines of SIMH deposit commands."""
 
+        if addr is None:
+            addr = self.addr
         for offs, w in enumerate(self):
-            yield f"D {oct(startaddr + (2 * offs))[2:]} {oct(w)[2:]}\n"
+            yield f"D {oct(addr + (2 * offs))[2:]} {oct(w)[2:]}\n"
 
     # This method shows one typical way to use the simh generator
     #
-    # A .ini file full of deposit ('D') commands starting at startaddr
+    # A .ini file full of deposit ('D') commands starting at addr
     # will be created from the instructions in the InstructionBlock
-    def export_to_simh_ini(self, outfilename, /, *, startaddr=0o10000):
+    def export_to_simh_ini(self, outfilename, /, *, addr=None):
         with open(outfilename, 'w') as f:
-            for s in self.simh(startaddr=startaddr):
+            if addr is None:
+                addr = self.addr
+            for s in self.simh(addr=addr):
                 f.write(s)
             # and set the PC to the start address
-            f.write(f"D PC {oct(startaddr)[2:]}\n")
+            f.write(f"D PC {oct(addr)[2:]}\n")
+
+
+# Another thin-layer, this time on the InstructionBlock class.
+# MemoryBlocks are useful when the code is being built out of multiple
+# chunks of InstructionBlocks, usually because there may be separate
+# contiguous bits (e.g., a chunk for user code and a chunk for kernel code).
+# This can also be used to place vectors into memory instead of writing
+# code to do it.
+#
+# All this does is gather multiple, named, InstructionBlock objects which
+# can then be accessed this way... assume b1 and b2 are InstructionBlock
+# objects previously created, and named 'foo' and 'bar':
+#
+#    m = MemoryBlocks(b1, b2)
+#
+#    with m.block('foo') as a:
+#         a.mov(blah blah)
+#         a.clr(blah blah)
+#
+#    with m.block('bar') as a:
+#         a.inc(blah blah)
+#         a.sub(blah blah)
+#     etc
+#
+# After each block has been populated, the entire shebang can be loaded
+# into a pdp instance 'p' like this:
+#
+#      m.loadphysmem(p)
+#
+# Alternatively (and this is helpful for testing test code against simh)
+# a simh "DO" file can be created like this:
+#
+#     for s in m.simh():
+#        print(s)
+#
+
+class MemoryBlocks:
+    def __init__(self, /, *blocks):
+        self._current = None
+        self._instblocks = {b.name: b for b in blocks}
+
+    def baseaddr(self, name):
+        return self._instblocks[name].addr
+
+    def addblock(self, b, /):
+        """Adds a block by its name."""
+        self._instblocks[b.name] = b
+
+    @contextmanager
+    def block(self, name, /):
+        try:
+            prev = self._current
+            self._current = self._instblocks[name]
+            yield self._current
+        finally:
+            self._current = prev
+
+    def loadphysmem(self, p):
+        for name, block in self._instblocks.items():
+            for a, w in enumerate(block, start=(self.baseaddr(name) >> 1)):
+                # make sure no bogus values get into memory
+                if w < 0 or w > 65535:
+                    raise ValueError(f"Illegal value {w} in loadphysmem")
+                p.physmem[a] = w
+
+    def simh(self):
+        for name, block in self._instblocks.items():
+            yield from block.simh(addr=self.baseaddr(name))
 
 
 if __name__ == "__main__":

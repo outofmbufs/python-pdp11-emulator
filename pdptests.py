@@ -37,7 +37,7 @@ import io
 import hashlib
 import boot
 
-from pdpasmhelper import InstructionBlock
+from pdpasmhelper import InstructionBlock, MemoryBlocks
 
 
 # subclass of KW11 to allow for selectable HZ rate
@@ -1367,7 +1367,7 @@ class TestMethods(unittest.TestCase):
 
         # --- this is how the above was exported for use in SIMH ---
         # with open('div.ini', 'w') as f:
-        #     for s in a.simh(startaddr=0o10000):
+        #     for s in a.simh(addr=0o10000):
         #        f.write(s + '\n')
         #
         # Then that .ini file was loaded into SIMH, the program was run,
@@ -1592,7 +1592,7 @@ class TestMethods(unittest.TestCase):
         # r4 becomes the trap number
 
         # now make all that as shown above
-        startaddr = 0o1000
+        addr = 0o1000
         tsaddr = 0o10000
         a = InstructionBlock()
 
@@ -1660,12 +1660,12 @@ class TestMethods(unittest.TestCase):
         for insts, tx in testvectors:
             with self.subTest(insts=insts, tx=tx):
                 p = self.make_pdp()
-                self.loadphysmem(p, list(a), startaddr)
+                self.loadphysmem(p, list(a), addr)
                 self.loadphysmem(p, insts, tsaddr)
-                p.run(pc=startaddr)
+                p.run(pc=addr)
                 self.check16(p)
                 self.assertEqual(tx, p.r[4])
-                self.assertEqual(p.r[6], a.getlabel('stack')+startaddr-4)
+                self.assertEqual(p.r[6], a.getlabel('stack')+addr-4)
 
     def _make_updown(self, taddr, uaddr, kaddr, uphysdata=0o200000):
         # Makes the instruction blocks required for the mmu_updown tests.
@@ -2297,51 +2297,51 @@ class TestMethods(unittest.TestCase):
 
     def test_mmr1pc(self):
         cn = self.usefulconstants()
-        instloc = 0o4000
-        testloc = 0o6000
-        trap_handler = 0o10000
 
-        # map kernel page 0 to physical 0
-        # put kernel stack at the top of that page (i.e., at 8k)
-        # map kernel page 7 to the I/O page
-        # do not enable separate I/D
+        blocks = [InstructionBlock('test', addr=0o6000),
+                  InstructionBlock('setup', addr=0o4000),
+                  InstructionBlock('trap', addr=0o10000),
+                  InstructionBlock('vectors', addr=0o250)]
+        m = MemoryBlocks(*blocks)
 
-        a = InstructionBlock()
-        a.mov(0o20000, 'sp')
-        a.clr(a.ptr(cn.KISA0))
-        a.mov(0o0760000 >> 6, a.ptr(cn.KISA0 + (7 * 2)))
+        # the test code - define this early because need to know its addr
+        with m.block('test') as a:
+            a.mov(0o20004, 'r2')         # invalid r2 for test
+            a.mov(a.ptr(cn.MMR1), 'r0')  # a no-fault-happened MMR1 (i.e., 0)
+            a.mov(0o12345, '(r2)+')      # this should fault (bad r2)
+            a.halt()
 
-        # set the PDRs for segment zero and seven
-        a.mov(0o077406, 'r0')
-        a.mov('r0', a.ptr(cn.KISD0))
-        a.mov('r0', a.ptr(cn.KISD0 + (7 * 2)))
+        with m.block('setup') as a:
+            # map kernel page 0 to physical 0
+            # put kernel stack at the top of that page (i.e., at 8k)
+            # map kernel page 7 to the I/O page
+            # do not enable separate I/D
+            a.mov(0o20000, 'sp')
+            a.clr(a.ptr(cn.KISA0))
+            a.mov(0o0760000 >> 6, a.ptr(cn.KISA0 + (7 * 2)))
 
-        # turn on relocation mode ...
-        a.inc(a.ptr(cn.MMR0))
+            # set the PDRs for segment zero and seven
+            a.mov(0o077406, 'r0')
+            a.mov('r0', a.ptr(cn.KISD0))
+            a.mov('r0', a.ptr(cn.KISD0 + (7 * 2)))
 
-        a.mov(trap_handler, '*$250')
-        a.mov(0o340, '*$252')
-        a.jmp(a.ptr(testloc))
+            # turn on relocation mode ...
+            a.inc(a.ptr(cn.MMR0))
+            a.jmp(a.ptr(m.baseaddr('test')))
+
+        with m.block('trap') as a:
+            a.mov(cn.MMR1, 'r3')      # r3 also serves as "got here" sentinel
+            a.mov('(r3)', 'r4')
+            a.halt()
+
+        with m.block('vectors') as a:
+            a.literal(m.baseaddr('trap'))
+            a.literal(0o340)
 
         p = self.make_pdp()
-        self.loadphysmem(p, a, instloc)
+        m.loadphysmem(p)
 
-        # the MMU fault handler
-        mf = InstructionBlock()
-        mf.mov(cn.MMR1, 'r3')      # r3 also serves as "got here" sentinel
-        mf.mov('(r3)', 'r4')
-        mf.halt()
-        self.loadphysmem(p, mf, trap_handler)
-
-        # the test code itself
-        tc = InstructionBlock()
-        tc.mov(0o20004, 'r2')         # test will access (r2) with invalid r2
-        tc.mov(a.ptr(cn.MMR1), 'r0')  # a no-fault-happened MMR1 (i.e., zero)
-        tc.mov(0o12345, '(r2)+')      # this should fault
-        tc.halt()
-        self.loadphysmem(p, tc, testloc)
-
-        p.run(pc=instloc)
+        p.run(pc=m.baseaddr('setup'))
         self.assertEqual(p.r[4], 0o11027)     # MMR1 result verified via simh
         self.assertEqual(p.r[0], 0)           # a "no fault" MMR1
         self.assertEqual(p.r[3], cn.MMR1)     # verifies trap handler invoked
@@ -2621,7 +2621,7 @@ class TestMethods(unittest.TestCase):
         # accessible this way (only accessible via console phys interface)
         # but in the emulation they are accessible so test them...
         p = self.make_pdp()
-        startaddr = 0o4000
+        addr = 0o4000
 
         IOPAGEBASE = 0o160000             # last 8k of the 16 bit space
         r0_addr = + p.IOPAGE_REGSETS_OFFS
@@ -2631,8 +2631,8 @@ class TestMethods(unittest.TestCase):
         a.mov(7, 'r2')                   # arbitrary; proving the next instr
         a.mov('r0', f"{p.IOPAGE_REGSETS_OFFS+2}.(r0)")  # should write into r2
         a.halt()
-        self.loadphysmem(p, a, startaddr)
-        p.run(pc=startaddr)
+        self.loadphysmem(p, a, addr)
+        p.run(pc=addr)
         self.check16(p)
         self.assertEqual(p.r[0], p.r[1])
         self.assertEqual(p.r[0], p.r[2])
@@ -2643,14 +2643,14 @@ class TestMethods(unittest.TestCase):
         # byte writes to KL11 transmit buffer need to work.
         p = self.make_pdp()
         p.associate_device(KL11(p.ub), 'KL')    # console
-        startaddr = 0o4000
+        addr = 0o4000
         a = InstructionBlock()
         a.clr('r0')                     # will be incremented to show success
         a.movb(13, a.ptr(0o177566))
         a.inc('r0')                     # r0 will be 1 if the movb worked
         a.halt()
-        self.loadphysmem(p, a, startaddr)
-        p.run(pc=startaddr)
+        self.loadphysmem(p, a, addr)
+        p.run(pc=addr)
         self.check16(p)
         self.assertEqual(p.r[0], 1)
 
@@ -2685,10 +2685,10 @@ class TestMethods(unittest.TestCase):
             else:
                 assert False, "bad cycle"
 
-        startaddr = 0o4000
+        addr = 0o4000
         ioaddr = 0o177720        # arbitrary; in a "reserved" block fwiw
         a = InstructionBlock()
-        a.mov(startaddr, 'sp')
+        a.mov(addr, 'sp')
         a.mov(ioaddr, 'r5')
         a.literal(5)                   # RESET instruction
         a.mov('(r5)', 'r0')            # expect r0 to be the RESET_VALUE
@@ -2700,10 +2700,10 @@ class TestMethods(unittest.TestCase):
         a.movb(0, '1(r5)')             # should only clear the high part
         a.mov('(r5)', 'r3')            # expect r3 to be 2
         a.halt()
-        self.loadphysmem(p, a, startaddr)
+        self.loadphysmem(p, a, addr)
 
         p.ub.register(callback, ioaddr & 8191)
-        p.run(pc=startaddr)
+        p.run(pc=addr)
         self.check16(p)
         # per the various comments in the test sequence above
         self.assertEqual(p.r[0], RESET_VALUE)
@@ -2742,7 +2742,7 @@ class TestMethods(unittest.TestCase):
         self.assertEqual(p.r[0], 0)
         self.assertEqual(p.r[1], 1)
 
-    # not automatically tested
+    # not automatically tested because it might depend on environment load
     def clocktests_basic(self):
         # test clock overhead
 
@@ -2759,34 +2759,34 @@ class TestMethods(unittest.TestCase):
         #   r3      count down (# of interrupts to take until HALT)
         #   r4:r5   32-bit count up performance tracker (r5 high)
 
-        mc = InstructionBlock()
-        mc_addr = 0o10000
+        m = MemoryBlocks(
+            InstructionBlock('test', addr=0o10000),
+            InstructionBlock('handler', addr=0o20000))
 
-        ih = InstructionBlock()
-        ih_addr = 0o20000
+        with m.block('test') as a:
+            a.mov(a.addr, 'sp')
+            a.mov(0o340, a.ptr(0o177776))        # PSW .. pri 7
+            a.mov(m.baseaddr('handler'), a.ptr(0o100))
+            a.mov(0o340, a.ptr(0o102))
+            a.mov(10, 'r3')
+            a.clr('r4')
+            a.clr('r5')
 
-        mc.mov(mc_addr, 'sp')
-        mc.mov(0o340, mc.ptr(0o177776))        # PSW .. pri 7
-        mc.mov(ih_addr, mc.ptr(0o100))
-        mc.mov(0o340, mc.ptr(0o102))
-        mc.mov(10, 'r3')
-        mc.clr('r4')
-        mc.clr('r5')
+            # enable interrupts and start the counter loop
+            a.mov(0o100, a.ptr(0o177546))
+            a.clr(a.ptr(0o177776))
+            a.label('loop')
+            a.inc('r4')           # NOTE: INC does not set C (!!)
+            a.bne('loop')
+            a.inc('r5')
+            a.br('loop')
 
-        # enable interrupts and start the counter loop
-        mc.mov(0o100, mc.ptr(0o177546))
-        mc.clr(mc.ptr(0o177776))
-        mc.label('loop')
-        mc.inc('r4')           # NOTE: INC does not set C (!!)
-        mc.bne('loop')
-        mc.inc('r5')
-        mc.br('loop')
-
-        ih.dec('r3')
-        ih.beq('done')
-        ih.rti()
-        ih.label('done')
-        ih.halt()
+        with m.block('handler') as a:
+            a.dec('r3')
+            a.beq('done')
+            a.rti()
+            a.label('done')
+            a.halt()
 
         # this test is a little questionable in that what it assumes
         # is that an increasing line clock frequency will correspond to
@@ -2803,10 +2803,10 @@ class TestMethods(unittest.TestCase):
         for hz in [2, 5, 10, 25, 50, 100]:
             p = self.make_pdp()
             clk = KW11HZ(p.ub, hz=hz)
-            self.loadphysmem(p, mc, mc_addr)
-            self.loadphysmem(p, ih, ih_addr)
-            p.run(pc=mc_addr)
+            m.loadphysmem(p)
+            p.run(pc=m.baseaddr('test'))
             thisrun = (p.r[5] << 16) | p.r[4]
+            print(thisrun)
             with self.subTest(hz=hz, prev=prev, thisrun=thisrun):
                 self.assertTrue(thisrun < prev)
             prev = thisrun
@@ -2844,12 +2844,12 @@ class TestMethods(unittest.TestCase):
         a.clr('r0')
         a.halt()
 
-        startaddr = 0o4000
-        self.loadphysmem(p, a, startaddr)
+        addr = 0o4000
+        self.loadphysmem(p, a, addr)
 
         for i in range(maxtest):
             with self.subTest(i=i):
-                p.run_steps(pc=startaddr, steps=i+1)
+                p.run_steps(pc=addr, steps=i+1)
                 self.check16(p)
                 self.assertEqual(p.r[0], i)
 
@@ -2865,12 +2865,12 @@ class TestMethods(unittest.TestCase):
             a.label(f"L{i}")
         a.clr('r0')
 
-        startaddr = 0o4000
-        self.loadphysmem(p, a, startaddr)
+        addr = 0o4000
+        self.loadphysmem(p, a, addr)
 
         for i in range(maxtest):
             with self.subTest(i=i):
-                p.run_until(pc=startaddr, stoppc=startaddr+a.getlabel(f"L{i}"))
+                p.run_until(pc=addr, stoppc=addr+a.getlabel(f"L{i}"))
                 self.check16(p)
                 self.assertEqual(p.r[0], i)
 
@@ -2885,8 +2885,8 @@ class TestMethods(unittest.TestCase):
         a.clr('r0')
         a.halt()
 
-        startaddr = 0o4000
-        self.loadphysmem(p, a, startaddr)
+        addr = 0o4000
+        self.loadphysmem(p, a, addr)
 
         # create one MultiBreakpoint with four different Steps bkpts,
         # in this order in the MultiBreakpoint:
@@ -2907,7 +2907,7 @@ class TestMethods(unittest.TestCase):
         mbp = BKP.MultiBreakpoint(s300, s75, s1, s50)
 
         # this test just knows there are four of them, code the easy/dumb way:
-        p.r[p.PC] = startaddr
+        p.r[p.PC] = addr
         p.run(breakpoint=mbp)
         self.check16(p)
 
@@ -2989,16 +2989,16 @@ class TestMethods(unittest.TestCase):
         # dynamically determine (within reason!) # of default lookbacks
         maxguess = 5000      # if it's more than this... meh
         curguess = 1
-        startaddr = 0o4000
+        addr = 0o4000
 
         while curguess < maxguess:
             a = InstructionBlock()
             for i in range(curguess):
                 a.mov(i, 'r0')
             a.halt()
-            self.loadphysmem(p, a, startaddr)
+            self.loadphysmem(p, a, addr)
             bp = BKP.Lookback()
-            p.run(pc=startaddr, breakpoint=bp)
+            p.run(pc=addr, breakpoint=bp)
             self.check16(p)
             # if current == first, there was 1 lookback, that's 1
             # But also the halt instruction takes up on; hence +2
@@ -3014,15 +3014,15 @@ class TestMethods(unittest.TestCase):
             a.mov(i, 'r0')
         a.clr('r0')
         a.halt()
-        self.loadphysmem(p, a, startaddr)
+        self.loadphysmem(p, a, addr)
 
         for i in range(maxtest):
             bp = BKP.Lookback(BKP.StepsBreakpoint(steps=i+1))
             bp7 = BKP.Lookback(BKP.StepsBreakpoint(steps=i+1), lookbacks=7)
             with self.subTest(i=i):
-                p.run(pc=startaddr, breakpoint=bp)
+                p.run(pc=addr, breakpoint=bp)
                 self.check16(p)
-                p.run(pc=startaddr, breakpoint=bp7)
+                p.run(pc=addr, breakpoint=bp7)
                 self.check16(p)
                 self.assertEqual(p.r[0], i)
                 if i+1 <= default_lookbacks:
@@ -3201,7 +3201,7 @@ class TestMethods(unittest.TestCase):
             raise ValueError("instwords must be a list of length 1 or 2")
 
         # The test timing loop: N instructions and an SOB
-        # NOTE: The instructions must not exxceed SOB branch reach
+        # NOTE: The instructions must not exceed SOB branch reach
         a = InstructionBlock()
         a.mov(loopcount, 'r4')
         a.label('LOOP')
