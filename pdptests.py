@@ -49,7 +49,7 @@ class KW11HZ(KW11):
 
 class TestMethods(unittest.TestCase):
 
-    PDPLOGLEVEL = 'INFO'
+    PDPLOGLEVEL = 'WARN'
 
     # used to create various instances, collects all the options
     # detail into this one place... mostly this is about loglevel
