@@ -1,11 +1,12 @@
 #!/bin/sh
 
-if [ x"$1" == xLONG ]
+if [ x"$1" = xLONG ]
 then
     EXTRATESTS="Y"
     shift
 else
     EXTRATESTS="N"
+    echo "Skipping long-duration tests; use "$0 LONG" to include them."
 fi
 
 FAILS=""
