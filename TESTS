@@ -41,7 +41,7 @@ then
     exit 1
 fi
 
-if [ $EXTRATESTS == Y ]
+if [ $EXTRATESTS = Y ]
 then
     echo "Starting long duration tests"
     # XXX these are just "known by hand" for now
